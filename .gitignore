@@ -12,6 +12,18 @@ log
 *-bak
 *bak.py
 
+# Ignore c++ build files
+build
+*.so
+
+# Ignore discarded files & experiments
+iir_so.py
+iir_cuda_so.cu
+contextnet
+convrnnt
+coslr
+mobilenet
+
 # Ignore Mac system files
 .DS_store
 
