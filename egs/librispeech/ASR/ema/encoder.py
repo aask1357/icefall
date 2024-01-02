@@ -4,225 +4,65 @@ import random
 import torch
 from torch.nn import functional as F
 from torch import Tensor, nn
+from lhotse.utils import LOG_EPSILON
 
 from encoder_interface import EncoderInterface
 from scaling import (
     ActivationBalancer,
     BasicNorm,
-    DoubleSwish,
-    ScaledConv2d,
     ScaledConv1d,
 )
-from lstm import RNNEncoder, RNNEncoderLayer
-from icefall.iir.iir import EMAFixed
-
-
-class IdentityLayer(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        
-    def forward(self, x: Tensor, x_len: Tensor) -> tp.Tuple[Tensor, None]:
-        return x, None
-
-
-class WrappedSyncBatchNorm(nn.SyncBatchNorm):
-    def forward(self, x: Tensor, x_length: Tensor) -> Tensor:
-        return super().forward(x)
-
-
-class WrappedBatchNorm1d(nn.BatchNorm1d):
-    def forward(self, x: Tensor, x_length: Tensor) -> Tensor:
-        return super().forward(x)
-
-
-class WrappedBatchNorm2d(nn.BatchNorm2d):
-    def forward(self, x: Tensor, x_length: Tensor) -> Tensor:
-        return super().forward(x)
-
-
-class WrappedBasicNorm(BasicNorm):
-    def __init__(
-        self,
-        num_channels: int,
-        channel_dim: int = 1,
-        eps: float = 0.25,
-        learn_eps: bool = True,
-    ):
-        super().__init__(num_channels, channel_dim, eps, learn_eps)
-
-    def forward(self, x: Tensor, x_length: Tensor) -> Tensor:
-        return super().forward(x)
-
-
-class WrappedScaledConv1d(ScaledConv1d):
-    def forward(self, x: Tensor, x_len: Tensor) -> Tensor:
-        return super().forward(x)
-
-
-class Conv2dSubsampling(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        layer1_channels: int = 8,
-        layer2_channels: int = 32,
-        layer3_channels: int = 128,
-        activation: str = 'ReLU',
-        norm: str = 'BatchNorm',
-        is_pnnx: bool = False,
-    ) -> None:
-        """
-        Args:
-          in_channels:
-            Number of channels in. The input shape is (N, T, in_channels).
-            Caution: It requires: T >= 9, in_channels >= 9.
-          out_channels
-            Output dim. The output shape is (N, ((T-3)//2-1)//2, out_channels)
-          layer1_channels:
-            Number of channels in layer1
-          layer1_channels:
-            Number of channels in layer2
-          is_pnnx:
-            True if we are converting the model to PNNX format.
-            False otherwise.
-        """
-        assert in_channels >= 9
-        super().__init__()
-
-        if activation == "DoubleSwish":
-            act = DoubleSwish
-        else:
-            act = getattr(nn, activation)
-        self.conv = nn.Sequential(
-            ScaledConv2d(
-                in_channels=1,
-                out_channels=layer1_channels,
-                kernel_size=3,
-                padding=0,
-            ),
-            ActivationBalancer(channel_dim=1),
-            act(),
-            ScaledConv2d(
-                in_channels=layer1_channels,
-                out_channels=layer2_channels,
-                kernel_size=3,
-                stride=2,
-            ),
-            ActivationBalancer(channel_dim=1),
-            act(),
-            ScaledConv2d(
-                in_channels=layer2_channels,
-                out_channels=layer3_channels,
-                kernel_size=3,
-                stride=2,
-            ),
-            ActivationBalancer(channel_dim=1),
-            act(),
-        )
-        self.out = ScaledConv1d(
-            layer3_channels * (((in_channels - 3) // 2 - 1) // 2), out_channels, 1
-        )
-        # set learn_eps=False because out_norm is preceded by `out`, and `out`
-        # itself has learned scale, so the extra degree of freedom is not
-        # needed.
-        if norm == "BasicNorm":
-            self.out_norm = WrappedBasicNorm(out_channels, learn_eps=False)
-        elif norm == "BatchNorm":
-            self.out_norm = WrappedBatchNorm1d(out_channels)
-        elif norm == "SyncBatchNorm":
-            self.out_norm = WrappedSyncBatchNorm(out_channels)
-        elif norm == "ExactBatchNorm":
-            raise NotImplementedError()
-        # constrain median of output to be close to zero.
-        self.out_balancer = ActivationBalancer(
-            channel_dim=-1, min_positive=0.45, max_positive=0.55
-        )
-
-        # ncnn supports only batch size == 1
-        self.is_pnnx = is_pnnx
-        self.conv_out_dim = self.out.weight.shape[1]
-
-    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> tp.Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-          x:
-            Its shape is (N, idim, T).
-
-        Returns:
-          Return a tensor of shape (N, odim, ((T-3)//2-1)//2)
-        """
-        if not self.is_pnnx:
-            lengths = (((lengths - 3) >> 1) - 1) >> 1
-        else:
-            lengths1 = torch.floor((lengths - 3) / 2)
-            lengths = torch.floor((lengths1 - 1) / 2)
-            lengths = lengths.to(lengths)
-        
-        # On entry, x is (N, idim, T)
-        x = x.unsqueeze(1)  # (N, idim, T) -> (N, 1, idim, T) i.e., (N, C, H, W)
-        x = self.conv(x)
-
-        if torch.jit.is_tracing() and self.is_pnnx:
-            x = x.reshape(1, self.conv_out_dim, -1)
-            x = self.out(x)
-        else:
-            # Now x is of shape (N, odim, ((T-3)//2-1)//2, ((idim-3)//2-1)//2)
-            b, c, f, t = x.size()
-            x = self.out(x.view(b, c * f, t))
-
-        # Now x is of shape (N, odim, ((T-3)//2-1))//2)
-        x = self.out_norm(x, lengths)
-        x = self.out_balancer(x)
-        
-        return x, lengths
-
-
-class CausalConv1dOnnx(nn.Conv1d):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        d, k, s = self.dilation[0], self.kernel_size[0], self.stride[0]
-        self.causal_padding = d * (k - 1) - (s - 1)
-
-    def initialize_cache(self, x: Tensor) -> Tensor:
-        return torch.zeros(
-            x.size(0), self.in_channels, self.causal_padding, device=x.device)
-
-    def forward(self, x: Tensor, cache: Tensor) -> tp.Tuple[Tensor, Tensor]:
-        x = torch.cat((cache, x), dim=2)
-        cache = x[:, :, -self.causal_padding:]
-        y = F.conv1d(x, self.weight, self.bias, self.stride, self.padding,
-                     self.dilation, self.groups)
-        return y, cache
+from icefall.iir.iir import EMA
 
 
 class CausalConv1d(nn.Conv1d):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, use_cache, **kwargs):
         super().__init__(*args, **kwargs)
         d, k, s = self.dilation[0], self.kernel_size[0], self.stride[0]
         self.causal_padding = d * (k - 1) - (s - 1)
-        # nn.init.kaiming_normal_(self.weight, nonlinearity='relu')
-        # if self.bias is not None:
-        #     self.bias.data.zero_()
+        self.cache = torch.empty(0)
+        self.use_cache = use_cache
+    
+    def empty_cache(self):
+        self.cache = torch.empty(0)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = F.pad(x, [self.causal_padding, 0])
+        if self.use_cache:
+            padding = x.new_zeros(x.size(0), x.size(1), self.causal_padding)
+            B = min(self.cache.size(0), x.size(0))
+            if B > 0:
+                padding[:B] = self.cache[:B]
+            x = torch.cat((padding, x), dim=2)
+            self.cache = x.detach()[:, :, -self.causal_padding:]
+        else:
+            x = F.pad(x, (self.causal_padding, 0))
         y = F.conv1d(x, self.weight, self.bias, self.stride, self.padding,
                      self.dilation, self.groups)
         return y
 
 
 class CausalScaledConv1d(ScaledConv1d):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, use_cache, **kwargs):
         super().__init__(*args, **kwargs, padding_mode='zeros')
         d, k, s = self.dilation[0], self.kernel_size[0], self.stride[0]
         self.causal_padding = d * (k - 1) - (s - 1)
         assert self.padding[0] == 0, self.padding
-        # nn.init.kaiming_normal_(self.weight, nonlinearity='relu')
-        # if self.bias is not None:
-        #     self.bias.data.zero_()
+        self.cache = torch.empty(0)
+        self.use_cache = use_cache
+    
+    def empty_cache(self):
+        self.cache = torch.empty(0)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = F.pad(x, [self.causal_padding, 0])
+        if self.use_cache:
+            padding = x.new_zeros(x.size(0), x.size(1), self.causal_padding)
+            B = min(self.cache.size(0), x.size(0))
+            if B > 0:
+                padding[:B] = self.cache[:B]
+            x = torch.cat((padding, x), dim=2)
+            self.cache = x.detach()[:, :, -self.causal_padding:]
+        else:
+            x = F.pad(x, (self.causal_padding, 0))
         return super().forward(x)
 
 
@@ -251,13 +91,14 @@ class CausalSE(nn.Module):
         chunksize: tp.List[int] = [16],
         se_gate: str = "sigmoid",
         gamma: float = 0.9,
+        use_cache: bool = False,
     ) -> None:
         super().__init__()
         assert dim % 8 == 0, 'Dimension should be divisible by 8.'
         self.dim = dim
         self.chunksize = chunksize
 
-        self.ema = EMAFixed(dim, gamma=gamma)
+        self.ema = EMA(dim, r_max=gamma, init_method="uniform", use_cache=use_cache)
         Conv = ScaledConv1d if scaled_conv else nn.Conv1d
         Act = getattr(nn, activation)
         if act_bal:
@@ -330,19 +171,20 @@ class ConvBlock(nn.Module):
         act_bal: bool = False,
         zero_init_residual: bool = False,
         se_gate: str = "sigmoid",
-        gamma: float = 0.9
+        gamma: float = 0.9,
+        use_cache: bool = False,
     ) -> None:
         super(ConvBlock, self).__init__()
         
         bias = True
         if norm == "BatchNorm":
-            Norm = WrappedBatchNorm1d
+            Norm = nn.BatchNorm1d
             bias = False
         elif norm == "SyncBatchNorm":
-            Norm = WrappedSyncBatchNorm
+            Norm = nn.SyncBatchNorm
             bias = False
         elif norm == "BasicNorm":
-            Norm = WrappedBasicNorm
+            Norm = BasicNorm
         else:
             raise RuntimeError(f"invalid norm {norm}")
 
@@ -365,11 +207,11 @@ class ConvBlock(nn.Module):
         self.norm1 = Norm(channels_hidden)
         self.depthwise = CausalConv(
             channels_hidden, channels_hidden, kernel_size, groups=channels_hidden,
-            dilation=dilation, bias=bias)
+            dilation=dilation, bias=bias, use_cache=use_cache)
         self.norm2 = Norm(channels_hidden)
         self.pointwise2 = Conv(channels_hidden, channels, 1)
         self.se = CausalSE(channels, se_activation, scaled_conv, act_bal, se_gate=se_gate,
-                           gamma=gamma)
+                           gamma=gamma, use_cache=use_cache)
         self.dropout = nn.Dropout(dropout, inplace=True)
         
         self.scale = None
@@ -401,11 +243,11 @@ class ConvBlock(nn.Module):
         x = self.pointwise1(x)
         x = self.act_bal(x)
         x = self.activation(x)
-        x = self.norm1(x, x_len)
+        x = self.norm1(x)
         x = self.depthwise(x)
         x = self.act_bal(x)
         x = self.activation(x)
-        x = self.norm2(x, x_len)
+        x = self.norm2(x)
         x = self.pointwise2(x)
         x = self.act_bal(x)
         x = self.se(x)
@@ -436,13 +278,13 @@ class Conv1dSubsampling(nn.Module):
         
         bias = True
         if norm == "BatchNorm":
-            Norm = WrappedBatchNorm1d
+            Norm = nn.BatchNorm1d
             bias = False
         elif norm == "SyncBatchNorm":
-            Norm = WrappedSyncBatchNorm
+            Norm = nn.SyncBatchNorm
             bias = False
         elif norm == "BasicNorm":
-            Norm = WrappedBasicNorm
+            Norm = BasicNorm
         else:
             raise RuntimeError(f"invalid norm {norm}")
 
@@ -463,24 +305,25 @@ class Conv1dSubsampling(nn.Module):
         self.pointwise1 = Conv(in_channels, channels_hidden, 1, bias=bias)
         self.norm1 = Norm(channels_hidden)
         self.depthwise = Conv(
-            channels_hidden, channels_hidden, 8, stride=4, padding=2,
+            channels_hidden, channels_hidden, 8, stride=4, padding=0,
             groups=channels_hidden, bias=bias
         )
         self.norm2 = Norm(channels_hidden)
         self.pointwise2 = Conv(channels_hidden, out_channels, 1)
     
     def forward(self, x, x_len):
+        x = F.pad(x, (2, 2), value=LOG_EPSILON)
         x = self.pointwise1(x)
         x = self.act_bal(x)
         x = self.activation(x)
-        x = self.norm1(x, x_len)
+        x = self.norm1(x)
         
         x_len = torch.floor(x_len / 4)
         
         x = self.depthwise(x)
         x = self.act_bal(x)
         x = self.activation(x)
-        x = self.norm2(x, x_len)
+        x = self.norm2(x)
         x = self.pointwise2(x)
         x = self.act_bal(x)
 
@@ -502,11 +345,12 @@ class Conv1dSubsamplingLinear(nn.Module):
         
         self.conv = nn.Sequential(
             Conv(in_ch, out_ch, 1, bias=False),
-            Conv(out_ch, out_ch, 8, stride=4, padding=2, groups=out_ch),
+            Conv(out_ch, out_ch, 8, stride=4, padding=0, groups=out_ch),
             ActBal(1)
         )
     
     def forward(self, x, x_len):
+        x = F.pad(x, (2, 2), value=LOG_EPSILON)
         x = self.conv(x)
         x_len = torch.floor(x_len / 4)
         return x, x_len
@@ -517,7 +361,6 @@ class Encoder(EncoderInterface):
         self,
         num_features: int,
         subsampling_factor: int = 4,
-        use_conv2d_subsampling: bool = True,
         channels: int = 384,
         channels_expansion: int = 512,
         kernel_size: int = 4,
@@ -529,18 +372,13 @@ class Encoder(EncoderInterface):
         norm: str = 'BatchNorm',
         se_activation: str = 'ReLU',
         is_pnnx: bool = False,
-        num_rnn_layers: int = 3,
-        dim_feedforward: int = 2048,
-        rnn_hidden_size: int = 640,
-        grad_norm_threshold: float = 25.0,
-        layer_dropout: float = 0.075,
-        aux_layer_period: int = 0,
         scaled_conv: bool = False,
         act_bal: bool = False,
         conv1d_subsampling_version: int = 1,
         zero_init_residual: bool = False,
         se_gate: str = "sigmoid",
         gamma: float = 0.9,
+        use_cache: bool = False,
     ) -> None:
         super().__init__()
 
@@ -552,15 +390,7 @@ class Encoder(EncoderInterface):
         
         Conv = ScaledConv1d if scaled_conv else nn.Conv1d
         
-        if use_conv2d_subsampling:
-            self.conv_pre = Conv2dSubsampling(
-                num_features,
-                channels,
-                activation=activation,
-                norm=norm,
-                is_pnnx=is_pnnx,
-            )
-        elif conv1d_subsampling_version == 1:
+        if conv1d_subsampling_version == 1:
             self.conv_pre = Conv1dSubsampling(
                 num_features,
                 channels,
@@ -587,34 +417,11 @@ class Encoder(EncoderInterface):
             layer = ConvBlock(
                 channels, channels_expansion, kernel_size, dilation,
                 activation, activation_kwargs, norm, dropout, se_activation,
-                scaled_conv, act_bal, zero_init_residual, se_gate, gamma=gamma
+                scaled_conv, act_bal, zero_init_residual, se_gate, gamma=gamma,
+                use_cache=use_cache
             )
             self.cnn.append(layer)
         self.proj = Conv(channels * 2, output_channels, 1, bias=False)
-        
-        self.lstm = None
-        if num_rnn_layers > 0:
-            encoder_layer = RNNEncoderLayer(
-                d_model=output_channels,
-                dim_feedforward=dim_feedforward,
-                rnn_hidden_size=rnn_hidden_size,
-                grad_norm_threshold=grad_norm_threshold,
-                dropout=dropout,
-                layer_dropout=layer_dropout,
-            )
-            self.lstm = RNNEncoder(
-                encoder_layer,
-                num_rnn_layers,
-                aux_layers=list(
-                    range(
-                        num_rnn_layers // 3,
-                        num_rnn_layers - 1,
-                        aux_layer_period,
-                    )
-                )
-                if aux_layer_period > 0
-                else None,
-            )
 
     def forward(
         self,
@@ -656,13 +463,7 @@ class Encoder(EncoderInterface):
             x, lengths = block(x, lengths, warmup)   # [batch_size, channels, time]
         x = self.proj(torch.cat((x, x_in), dim=1))  # [batch_size, channels_out, time]
 
-        if self.lstm is not None:
-            x = x.permute(2, 0, 1)  # [T, B, C]
-            x = self.lstm(x, warmup=warmup)[0]
-            x = x.permute(1, 0, 2)  # [B, T, C]
-        else:
-            x = x.transpose(1, 2)   # [B, T, C]
-        
+        x = x.transpose(1, 2)   # [B, T, C]
         return x, lengths, None
 
 
@@ -679,7 +480,6 @@ def test_model(check_unused_params: bool = False):
         norm='BatchNorm',
         num_rnn_layers=0,
         scaled_conv=True,
-        use_conv2d_subsampling=True,
         conv1d_subsampling_version=2,
         zero_init_residual=True,
         se_gate="tanh",

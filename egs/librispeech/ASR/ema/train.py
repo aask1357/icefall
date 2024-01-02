@@ -167,27 +167,6 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--dim-feedforward",
-        type=int,
-        default=2048,
-        help="Dimension of feed forward.",
-    )
-
-    parser.add_argument(
-        "--num-rnn-layers",
-        type=int,
-        default=3,
-        help="Hidden dim for LSTM layers.",
-    )
-
-    parser.add_argument(
-        "--rnn-hidden-size",
-        type=int,
-        default=640,
-        help="Hidden dim for LSTM layers.",
-    )
-
-    parser.add_argument(
         "--scaled-conv",
         type=str2bool,
         default=False,
@@ -199,12 +178,6 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         type=str2bool,
         default=False,
         help="Whether to use Activation Balancer or not.",
-    )
-
-    parser.add_argument(
-        "--use-conv2d-subsampling",
-        type=str2bool,
-        default=True,
     )
 
     parser.add_argument(
@@ -229,6 +202,12 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         "--ema-gamma",
         type=float,
         default=0.9,
+    )
+
+    parser.add_argument(
+        "--use-cache",
+        type=str2bool,
+        default=False,
     )
 
 
@@ -530,16 +509,13 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         norm=params.encoder_norm,
         se_activation=params.encoder_se_activation,
         is_pnnx=params.is_pnnx,
-        num_rnn_layers=params.num_rnn_layers,
-        rnn_hidden_size=params.rnn_hidden_size,
-        dim_feedforward=params.dim_feedforward,
         scaled_conv=params.scaled_conv,
         act_bal=params.act_bal,
-        use_conv2d_subsampling=params.use_conv2d_subsampling,
         conv1d_subsampling_version=params.conv1d_subsampling_version,
         zero_init_residual=params.zero_init_residual,
         se_gate=params.se_gate,
         gamma=params.ema_gamma,
+        use_cache=params.use_cache,
     )
     return encoder
 

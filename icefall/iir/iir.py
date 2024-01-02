@@ -27,7 +27,7 @@ if not _EXTENSION_AVAILABLE:
 
 
 def iir_torch(x: Tensor, denom_flipped: Tensor, out: Tensor) -> None:
-    N = denom_flipped.size(0)
+    N = denom_flipped.size(1)
     if N == 1:
         iir_torch_first_order(x, denom_flipped, out)
     elif N == 2:
@@ -183,7 +183,6 @@ class IIRTorchFunction(torch.autograd.Function):
         #   out: [B, C, N+T]
         xt = x.transpose(0, 2)      # [T, C, B]
         out = out.transpose(0, 2)   # [N+T, C, B]
-        print(xt.shape, out.shape)
         iir_torch(xt, weight, out)
         out = out.transpose(0, 2)   # [B, C, N+T]
         ctx.save_for_backward(weight, out)
@@ -263,9 +262,8 @@ def inv_sigmoid(x: float) -> float:
 
 class EMAFixed(nn.Module):
     '''First-order IIR filter layer.
-    weight: [C, 2] where weight[:, 0] = 0, weight[:, 1] = some_value
+    weight: [C]
     y[:, :, i+1] = y[:, :, i] * gamma + (1 - gamma) * x[:, :, i+1]
-    where gamma = r_max * sigmoid(weight), 0 < r_max <= 1
     '''
     
     def __init__(
@@ -273,6 +271,7 @@ class EMAFixed(nn.Module):
         channels: int,
         gamma: float = 0.9,
         reversed: bool = False,
+        use_cache: bool = False,
         device = None,
         dtype = torch.float32,
     ):
@@ -285,8 +284,14 @@ class EMAFixed(nn.Module):
         weight = torch.empty(channels, **factory_kwargs).fill_(gamma)
         self.register_buffer("weight", weight)
         self.weight: Tensor
+        
+        self.cache = torch.empty(0)
+        self.use_cache = use_cache
     
-    def forward(self, x: Tensor, prev: tp.Optional[Tensor] = None) -> Tensor:
+    def empty_cache(self):
+        self.cache = torch.empty(0)
+
+    def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, T]
         gamma = self.weight.unsqueeze(1)
         
@@ -294,12 +299,13 @@ class EMAFixed(nn.Module):
         if self.reversed:
             x = x.flip(2)
             
-        out = x.new_empty(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
-        out[:, :, 0] = 0.
-        if prev is not None:
-            B = max(out.size(0), prev.size(0))
-            out[:B, :, 0] = prev[:B, :, 0]
+        out = x.new_zeros(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
+        B = min(self.cache.size(0), x.size(0))
+        if B > 0:
+            out[:B, :, :1] = self.cache[:B, :, :1]
         x = iir(x, gamma, out)       # [B, C, T]
+        if self.use_cache:
+            self.cache = x.detach()[:, :, -1:]
         if self.reversed:
             x = x.flip(2)
         return x
@@ -307,7 +313,7 @@ class EMAFixed(nn.Module):
 
 class EMA(nn.Module):
     '''First-order IIR filter layer.
-    weight: [C, 2] where weight[:, 0] = 0, weight[:, 1] = some_value
+    weight: [C]
     y[:, :, i+1] = y[:, :, i] * gamma + (1 - gamma) * x[:, :, i+1]
     where gamma = r_max * sigmoid(weight), 0 < r_max <= 1
     '''
@@ -319,6 +325,7 @@ class EMA(nn.Module):
         init_method: str = "constant",
         init_value: float = 0.9,
         reversed: bool = False,
+        use_cache: bool = False,
         device = None,
         dtype = torch.float32,
     ):
@@ -342,8 +349,14 @@ class EMA(nn.Module):
             )
         else:
             raise ValueError(f"Invalid init_method {init_method}")
+        
+        self.cache = torch.empty(0)
+        self.use_cache = use_cache
     
-    def forward(self, x: Tensor, prev: tp.Optional[Tensor] = None) -> Tensor:
+    def empty_cache(self):
+        self.cache = torch.empty(0)
+
+    def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, T]
         gamma = self.r_max * torch.sigmoid(self.weight)     # [C]
         gamma = gamma.unsqueeze(1)  # [C, 1]
@@ -352,19 +365,20 @@ class EMA(nn.Module):
         if self.reversed:
             x = x.flip(2)
         
-        out = x.new_empty(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
-        out[:, :, 0] = 0.
-        if prev is not None:
-            B = max(out.size(0), prev.size(0))
-            out[:B, :, 0] = prev[:B, :, 0]
+        out = x.new_zeros(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
+        B = min(self.cache.size(0), x.size(0))
+        if B > 0:
+            out[:B, :, :1] = self.cache[:B, :, :1]
         x = iir(x, gamma, out)       # [B, C, T]
+        if self.use_cache:
+            self.cache = x.detach()[:, :, -1:]
         if self.reversed:
             x = x.flip(2)
         return x
 
 
 class EMATorch(EMA):
-    def forward(self, x: Tensor, prev: tp.Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, T]
         gamma = self.r_max * torch.sigmoid(self.weight)     # [C]
         gamma = gamma.unsqueeze(1)  # [C, 1]
@@ -373,13 +387,13 @@ class EMATorch(EMA):
         if self.reversed:
             x = x.flip(2)
         
-        out = x.new_empty(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
-        out[:, :, 0] = 0.
-        if prev is not None:
-            B = max(out.size(0), prev.size(0))
-            out[:B, :, 0] = prev[:B, :, 0]
-        
+        out = x.new_zeros(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
+        B = min(self.cache.size(0), x.size(0))
+        if B > 0:
+            out[:B, :, :1] = self.cache[:B, :, :1]
         x = iir_default(x, gamma, out)[:, :, 1:]    # [B, C, T]
+        if self.use_cache:
+            self.cache = x.detach()[:, :, -1:]
         if self.reversed:
             x = x.flip(2)
         return x
@@ -501,18 +515,18 @@ def iir_module_test():
         x.retain_grad()
         
         iir1 = EMATorch(C, init_value=0.9, **factory_kwargs)
+        iir2 = EMA(C, init_value=0.9, **factory_kwargs)
+        with torch.no_grad():
+            iir2.load_state_dict(iir1.state_dict())
+        
         y1 = iir1(x)
         y1.square().mean().backward()
         xg = x.grad.clone()
         x.grad = None
-        
-        iir2 = EMA(C, init_value=0.9, **factory_kwargs)
-        with torch.no_grad():
-            iir2.load_state_dict(iir1.state_dict())
         y2 = iir2(x)
         y2.square().mean().backward()
         assert torch.all(torch.isfinite(y2.data))
-        # print(y1, y2)
+        # print(y1.squeeze(), y2.squeeze())
         # assert torch.allclose(y1.data, y2.data, rtol=1e-3)
         # assert torch.allclose(iir1.weight.grad, iir2.weight.grad, rtol=1e-3)
         # assert torch.allclose(xg, x.grad, rtol=1e-3)
@@ -567,6 +581,6 @@ def train_speed_test():
 
 if __name__ == "__main__":
     # simple_test()
-    random_test()
+    # random_test()
     iir_module_test()
-    train_speed_test()
+    # train_speed_test()
