@@ -248,6 +248,7 @@ class CausalSE(nn.Module):
         scaled_conv: bool = False,
         act_bal: bool = False,
         chunksize: tp.List[int] = [16],
+        se_gate: str = "sigmoid",
     ) -> None:
         super().__init__()
         assert dim % 8 == 0, 'Dimension should be divisible by 8.'
@@ -270,6 +271,12 @@ class CausalSE(nn.Module):
                 Act(inplace=True),
                 Conv(dim // 8, dim, 1),
             )
+        if se_gate == "sigmoid":
+            self.gate = nn.Sigmoid()
+        elif se_gate == "tanh":
+            self.gate = nn.Tanh()
+        else:
+            raise ValueError(f"invalid se_gate '{se_gate}'")
 
     def forward(self, x: Tensor) -> tp.Tuple[Tensor, Tensor]:
         """
@@ -297,7 +304,7 @@ class CausalSE(nn.Module):
         
         # main network
         output = self.sequential(x)
-        output = output.sigmoid()
+        output = self.gate(output)
         
         # expand length from (L+P)//cs to L
         # [B, C, (L+P)//cs] -> [B, C, L+P]
@@ -321,6 +328,8 @@ class ConvBlock(nn.Module):
         se_activation: str = 'ReLU',
         scaled_conv: bool = False,
         act_bal: bool = False,
+        zero_init_residual: bool = False,
+        se_gate: str = "sigmoid",
     ) -> None:
         super(ConvBlock, self).__init__()
         
@@ -358,8 +367,12 @@ class ConvBlock(nn.Module):
             dilation=dilation, bias=bias)
         self.norm2 = Norm(channels_hidden)
         self.pointwise2 = Conv(channels_hidden, channels, 1)
-        self.se = CausalSE(channels, se_activation, scaled_conv, act_bal)
+        self.se = CausalSE(channels, se_activation, scaled_conv, act_bal, se_gate=se_gate)
         self.dropout = nn.Dropout(dropout, inplace=True)
+        
+        self.scale = None
+        if zero_init_residual:
+            self.scale = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
@@ -396,8 +409,10 @@ class ConvBlock(nn.Module):
         x = self.se(x)
         x = self.dropout(x)
         
-        if warmup < 1:
-            x = torch.add(inputs, x, alpha=warmup)
+        if self.scale is not None:
+            x = torch.addcmul(inputs, x, self.scale)    # x = inputs + x * self.scale
+        elif warmup < 1:
+            x = torch.add(inputs, x, alpha=warmup)      # x = inputs + x * warmup
         else:
             x = x + inputs
 
@@ -470,28 +485,29 @@ class Conv1dSubsampling(nn.Module):
         return x, x_len
 
 
-class ConvNorm(nn.Module):
-    def __init__(self, in_ch, out_ch, scaled_conv, norm):
+class Conv1dSubsamplingLinear(nn.Module):
+    def __init__(self, in_ch, out_ch, act_bal, scaled_conv):
         super().__init__()
-        Conv = ScaledConv1d if scaled_conv else nn.Conv1d
-        bias = True
-        if norm == "BatchNorm":
-            Norm = WrappedBatchNorm1d
-            bias = False
-        elif norm == "SyncBatchNorm":
-            Norm = WrappedSyncBatchNorm
-            bias = False
-        elif norm == "BasicNorm":
-            Norm = WrappedBasicNorm
+        if scaled_conv:
+            Conv = ScaledConv1d
         else:
-            raise RuntimeError(f"invalid norm {norm}")
-        self.conv = Conv(in_ch * 2, out_ch, 1, bias=bias)
-        self.norm = Norm(out_ch)
+            Conv = nn.Conv1d
+        
+        if act_bal:
+            ActBal = ActivationBalancer
+        else:
+            ActBal = nn.Identity
+        
+        self.conv = nn.Sequential(
+            Conv(in_ch, out_ch, 1, bias=False),
+            Conv(out_ch, out_ch, 8, stride=4, padding=2, groups=out_ch),
+            ActBal(1)
+        )
     
-    def forward(self, x):
+    def forward(self, x, x_len):
         x = self.conv(x)
-        x = self.norm(x, x)
-        return x
+        x_len = torch.floor(x_len / 4)
+        return x, x_len
 
 
 class Encoder(EncoderInterface):
@@ -519,7 +535,9 @@ class Encoder(EncoderInterface):
         aux_layer_period: int = 0,
         scaled_conv: bool = False,
         act_bal: bool = False,
-        final_norm: bool = False,
+        conv1d_subsampling_version: int = 1,
+        zero_init_residual: bool = False,
+        se_gate: str = "sigmoid",
     ) -> None:
         super().__init__()
 
@@ -539,14 +557,25 @@ class Encoder(EncoderInterface):
                 norm=norm,
                 is_pnnx=is_pnnx,
             )
-        else:
+        elif conv1d_subsampling_version == 1:
             self.conv_pre = Conv1dSubsampling(
                 num_features,
                 channels,
                 activation=activation,
                 norm=norm,
-                channels_hidden=channels_expansion
+                channels_hidden=channels_expansion,
+                scaled_conv=scaled_conv,
+                act_bal=act_bal
             )
+        elif conv1d_subsampling_version == 2:
+            self.conv_pre = Conv1dSubsamplingLinear(
+                num_features,
+                channels,
+                scaled_conv=scaled_conv,
+                act_bal=act_bal
+            )
+        else:
+            raise ValueError(f"Invalid conv1d-subsampling-version {conv1d_subsampling_version}")
 
         self.is_pnnx = is_pnnx
 
@@ -555,14 +584,10 @@ class Encoder(EncoderInterface):
             layer = ConvBlock(
                 channels, channels_expansion, kernel_size, dilation,
                 activation, activation_kwargs, norm, dropout, se_activation,
-                scaled_conv, act_bal,
+                scaled_conv, act_bal, zero_init_residual, se_gate
             )
             self.cnn.append(layer)
-        if final_norm:
-            
-            self.proj = ConvNorm(channels, output_channels, scaled_conv, norm)
-        else:
-            self.proj = Conv(channels * 2, output_channels, 1, bias=False)
+        self.proj = Conv(channels * 2, output_channels, 1, bias=False)
         
         self.lstm = None
         if num_rnn_layers > 0:
@@ -643,16 +668,18 @@ def test_model(check_unused_params: bool = False):
     device = "cpu"
     model = Encoder(
         80,
-        dilations=[1 for _ in range(21)],
+        dilations=[1 for _ in range(22)],
         kernel_size=8,
         channels=384,
         channels_expansion=1536,
         output_channels=512,
         norm='BatchNorm',
         num_rnn_layers=0,
-        dim_feedforward=2048,
-        rnn_hidden_size=640,
-        scaled_conv=True
+        scaled_conv=True,
+        use_conv2d_subsampling=True,
+        conv1d_subsampling_version=2,
+        zero_init_residual=True,
+        se_gate="tanh",
     ).to(device)
     conv2d_params, conv1d_params, lstm_params = 0, 0, 0
     conv1d_wo_se, conv1d_se = 0, 0

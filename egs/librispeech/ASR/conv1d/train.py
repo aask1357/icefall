@@ -207,9 +207,21 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--final-norm",
+        "--conv1d-subsampling-version",
+        type=int,
+        default=1,
+    )
+
+    parser.add_argument(
+        "--zero-init-residual",
         type=str2bool,
         default=False,
+    )
+
+    parser.add_argument(
+        "--se-gate",
+        type=str,
+        default="sigmoid",
     )
 
 
@@ -517,7 +529,9 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         scaled_conv=params.scaled_conv,
         act_bal=params.act_bal,
         use_conv2d_subsampling=params.use_conv2d_subsampling,
-        final_norm=params.final_norm,
+        conv1d_subsampling_version=params.conv1d_subsampling_version,
+        zero_init_residual=params.zero_init_residual,
+        se_gate=params.se_gate
     )
     return encoder
 
