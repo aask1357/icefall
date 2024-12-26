@@ -42,6 +42,7 @@ export CUDA_VISIBLE_DEVICES="0,1,2,3"
   --max-duration 550
 """
 
+import time
 import argparse
 import copy
 import logging
@@ -56,16 +57,19 @@ import sentencepiece as spm
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import AsrDataModule, filter_ipa
 from decoder import Decoder
 from joiner import Joiner
 from partition_params import update_param_groups
-from lhotse.cut import Cut
+from lhotse import validate
+from lhotse.cut import Cut, CutSet
 from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from encoder import Encoder
 from model import Transducer
 from optim import Eden, Eve
+from plot_params import plot_params
+from custom_fbank import CustomFbankConfig as FbankConfig
 from torch import Tensor
 from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -108,20 +112,20 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--dilations-version",
         type=int,
-        default=1,
+        default=22,
         help="1: [1, 2, 4, 1, 2, 4] / 2: [1] * 16 / 3: [1] * 12",
     )
     
     parser.add_argument(
         "--channels-expansion",
         type=int,
-        default=512,
+        default=1536,
     )
     
     parser.add_argument(
         "--kernel-size",
         type=int,
-        default=4,
+        default=8,
     )
 
     parser.add_argument(
@@ -169,45 +173,69 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--scaled-conv",
         type=str2bool,
-        default=False,
+        default=True,
         help="Whether to use ScaledConv or plain Conv.",
     )
 
     parser.add_argument(
         "--act-bal",
         type=str2bool,
-        default=False,
+        default=True,
         help="Whether to use Activation Balancer or not.",
     )
 
     parser.add_argument(
         "--conv1d-subsampling-version",
         type=int,
-        default=1,
+        default=2,
     )
 
     parser.add_argument(
         "--zero-init-residual",
         type=str2bool,
-        default=False,
+        default=True,
     )
 
     parser.add_argument(
         "--se-gate",
         type=str,
-        default="sigmoid",
+        default="tanh",
     )
 
     parser.add_argument(
         "--ema-gamma",
         type=float,
-        default=0.9,
+        default=0.93,
     )
 
     parser.add_argument(
         "--use-cache",
         type=str2bool,
         default=False,
+    )
+
+    parser.add_argument(
+        "--chunksize",
+        type=int,
+        default=16,
+    )
+
+    parser.add_argument(
+        "--encoder-mean",
+        type=float,
+        default=-6.375938187300722,
+    )
+
+    parser.add_argument(
+        "--encoder-std",
+        type=float,
+        default=4.354657227491409,
+    )
+
+    parser.add_argument(
+        "--subsampling-factor",
+        type=int,
+        default=4,
     )
 
 
@@ -278,6 +306,18 @@ def get_parser():
         type=str,
         default="data/lang_bpe_500/bpe.model",
         help="Path to the BPE model",
+    )
+
+    parser.add_argument(
+        "--optimizer-name",
+        type=str,
+        default="Eve",
+    )
+
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=1e-3,
     )
 
     parser.add_argument(
@@ -469,10 +509,10 @@ def get_params() -> AttributeDict:
             "batch_idx_train": 0,
             "log_interval": 100,
             "reset_interval": 200,
-            "valid_interval": 1000,  # For the 100h subset, use 800
+            "valid_interval": 500,  # For the 100h subset, use 800
             # parameters for conformer
             "feature_dim": 80,
-            "subsampling_factor": 4,
+            # "subsampling_factor": 4,
             # parameters for Noam
             "model_warm_step": 3000,  # arg given to model, not for lrate
             "env_info": get_env_info(),
@@ -516,6 +556,9 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         se_gate=params.se_gate,
         gamma=params.ema_gamma,
         use_cache=params.use_cache,
+        mean=params.encoder_mean,
+        std=params.encoder_std,
+        chunksize=params.chunksize,
     )
     return encoder
 
@@ -680,6 +723,7 @@ def compute_loss(
     batch: dict,
     is_training: bool,
     warmup: float = 1.0,
+    rank: int = 0,
 ) -> Tuple[Tensor, MetricsTracker]:
     """
     Compute RNN-T loss given the model and its inputs.
@@ -707,8 +751,7 @@ def compute_loss(
 
     supervisions = batch["supervisions"]
     feature_lens = supervisions["num_frames"].to(device)
-
-    texts = batch["supervisions"]["text"]
+    texts = batch["supervisions"][params.cutset_text]
     y = sp.encode(texts, out_type=int)
     y = k2.RaggedTensor(y).to(device)
 
@@ -733,7 +776,8 @@ def compute_loss(
                 f"simple_loss: {simple_loss}\n"
                 f"pruned_loss: {pruned_loss}"
             )
-            display_and_save_batch(batch, params=params, sp=sp)
+            if rank == 0:
+                display_and_save_batch(batch, params=params, sp=sp)
             simple_loss = simple_loss[simple_loss_is_finite]
             pruned_loss = pruned_loss[pruned_loss_is_finite]
 
@@ -866,10 +910,15 @@ def train_one_epoch(
     model.train()
 
     tot_loss = MetricsTracker()
-
+    st = time.perf_counter()
     for batch_idx, batch in enumerate(train_dl):
         params.batch_idx_train += 1
         batch_size = len(batch["supervisions"]["text"])
+        print(
+            f"\rbatch load time: {time.perf_counter() - st:.2f} sec",
+            end="",
+            flush=True
+        )
 
         try:
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
@@ -880,6 +929,7 @@ def train_one_epoch(
                     batch=batch,
                     is_training=True,
                     warmup=(params.batch_idx_train / params.model_warm_step),
+                    rank=rank,
                 )
             # summary stats
             tot_loss = (tot_loss * (1 - 1 / params.reset_interval)) + loss_info
@@ -893,7 +943,8 @@ def train_one_epoch(
             scaler.update()
             optimizer.zero_grad()
         except:  # noqa
-            display_and_save_batch(batch, params=params, sp=sp)
+            if rank == 0:
+                display_and_save_batch(batch, params=params, sp=sp)
             raise
 
         if params.print_diagnostics and batch_idx == 30:
@@ -935,7 +986,7 @@ def train_one_epoch(
         if batch_idx % params.log_interval == 0 and not params.print_diagnostics:
             cur_lr = scheduler.get_last_lr()[0]
             logging.info(
-                f"Epoch {params.cur_epoch}, "
+                f"\rEpoch {params.cur_epoch}, "
                 f"batch {batch_idx}, loss[{loss_info}], "
                 f"tot_loss[{tot_loss}], batch size: {batch_size}, "
                 f"lr: {cur_lr:.2e}"
@@ -974,6 +1025,11 @@ def train_one_epoch(
                 valid_info.write_summary(
                     tb_writer, "train/valid_", params.batch_idx_train
                 )
+                model_params_to_plot = {}
+                plot_params(model_params_to_plot, model)
+                for key, value in model_params_to_plot.items():
+                    tb_writer.add_histogram(key, value, params.batch_idx_train)
+        st = time.perf_counter()
 
     loss_value = tot_loss["loss"] / tot_loss["frames"]
     params.train_loss = loss_value
@@ -1047,14 +1103,22 @@ def run(rank, world_size, args):
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank])
 
-    # ema = {
-    #     "regex_list": ["ema\\.weight"],
-    #     "clamp": False,
-    #     "lr": params.initial_lr * 0.1
-    # }
-    # model_params = update_param_groups(model, [ema])
-    model_params = model.parameters()
-    optimizer = Eve(model_params, lr=params.initial_lr)
+    ema = {
+        "regex_list": ["ema\\.weight", "scale"],
+        "weight_decay": 0.0,
+    }
+    model_params = update_param_groups(model, [ema])
+    # model_params = model.parameters()
+    if params.optimizer_name == "AdamW":
+        optimizer = torch.optim.AdamW(
+            model_params,
+            lr=params.initial_lr,
+            weight_decay=params.weight_decay,
+        )
+    elif params.optimizer_name == "Eve":
+        optimizer = Eve(model_params, lr=params.initial_lr)
+    else:
+        raise ValueError(f"Unsupported optimizer: {params.optimizer_name}")
 
     scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
 
@@ -1077,12 +1141,27 @@ def run(rank, world_size, args):
     if params.print_diagnostics:
         diagnostic = diagnostics.attach_diagnostics(model)
 
-    librispeech = LibriSpeechAsrDataModule(args)
-
-    train_cuts = librispeech.train_clean_100_cuts()
-    if params.full_libri:
-        train_cuts += librispeech.train_clean_360_cuts()
-        train_cuts += librispeech.train_other_500_cuts()
+    datamodule = AsrDataModule(args)
+    train_cuts = CutSet()
+    if params.data_libri_train:
+        train_cuts += datamodule.train_clean_100_cuts()
+        if params.full_libri:
+            train_cuts += datamodule.train_clean_360_cuts()
+            train_cuts += datamodule.train_other_500_cuts()
+    if params.data_ksponspeech_train:
+        train_cuts += datamodule.ksponspeech_train_cuts()
+    if params.data_zeroth_train:
+        train_cuts += datamodule.zeroth_train_cuts()
+    if params.data_command_kid_train:
+        train_cuts += datamodule.command_kid_train_cuts()
+    if params.data_command_nor_train:
+        train_cuts += datamodule.command_nor_train_cuts()
+    if params.data_command_old_train:
+        train_cuts += datamodule.command_old_train_cuts()
+    if params.data_freetalk_kid_train:
+        train_cuts += datamodule.freetalk_kid_train_cuts()
+    if params.data_freetalk_nor_train:
+        train_cuts += datamodule.freetalk_nor_train_cuts()
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1093,7 +1172,7 @@ def run(rank, world_size, args):
         # You should use ../local/display_manifest_statistics.py to get
         # an utterance duration distribution for your dataset to select
         # the threshold
-        if c.duration < 1.0 or c.duration > 20.0:
+        if c.duration < 0.9 or c.duration > 31.0:
             logging.warning(
                 f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
             )
@@ -1105,15 +1184,31 @@ def run(rank, world_size, args):
 
         # In ./lstm.py, the conv module uses the following expression
         # for subsampling
-        T = ((c.num_frames - 3) // 2 - 1) // 2
-        tokens = sp.encode(c.supervisions[0].text, out_type=str)
+        if c.num_frames is not None:
+            T = ((c.num_frames - 3) // 2 - 1) // 2
+        else:
+            T = int(c.duration / FbankConfig.frame_shift)
+
+        if params.cutset_text == "text":
+            text = c.supervisions[0].text
+        elif params.cutset_text.startswith("custom."):
+            text_type = params.cutset_text[7:]
+            _filter_ipa = (text_type == "ipa_filtered")
+            if _filter_ipa:
+                text_type = "ipa"
+            text = c.supervisions[0].custom[text_type]
+            if _filter_ipa:
+                text = filter_ipa(text)
+        else:
+            raise ValueError(f"Unsupported cutset_text: {params.cutset_text}")
+        tokens = sp.encode(text, out_type=str)
 
         if T < len(tokens):
             logging.warning(
                 f"Exclude cut with ID {c.id} from training. "
                 f"Number of frames (before subsampling): {c.num_frames}. "
                 f"Number of frames (after subsampling): {T}. "
-                f"Text: {c.supervisions[0].text}. "
+                f"Text: {text}. "
                 f"Tokens: {tokens}. "
                 f"Number of tokens: {len(tokens)}"
             )
@@ -1130,13 +1225,21 @@ def run(rank, world_size, args):
     else:
         sampler_state_dict = None
 
-    train_dl = librispeech.train_dataloaders(
+    train_dl = datamodule.train_dataloaders(
         train_cuts, sampler_state_dict=sampler_state_dict
     )
 
-    valid_cuts = librispeech.dev_clean_cuts()
-    valid_cuts += librispeech.dev_other_cuts()
-    valid_dl = librispeech.valid_dataloaders(valid_cuts)
+    valid_cuts = CutSet()
+    if params.data_libri_dev_clean:
+        valid_cuts += datamodule.dev_clean_cuts()
+    if params.data_libri_dev_other:
+        valid_cuts += datamodule.dev_other_cuts()
+    if params.data_ksponspeech_dev:
+        valid_cuts += datamodule.ksponspeech_dev_cuts()
+    if params.data_zeroth_test:
+        valid_cuts += datamodule.zeroth_test_cuts()
+    validate(valid_cuts)
+    valid_dl = datamodule.valid_dataloaders(valid_cuts)
 
     scaler = GradScaler(enabled=params.use_fp16)
     if checkpoints and "grad_scaler" in checkpoints:
@@ -1217,7 +1320,11 @@ def scan_pessimistic_batches_for_oom(
     )
     batches, crit_values = find_pessimistic_batches(train_dl.sampler)
     for criterion, cuts in batches.items():
+        st = time.perf_counter()
         batch = train_dl.dataset[cuts]
+        logging.info(
+            f"batch load time: {time.perf_counter() - st:.2f} sec"
+        )
         try:
             with torch.cuda.amp.autocast(enabled=params.use_fp16):
                 loss, _ = compute_loss(
@@ -1242,11 +1349,12 @@ def scan_pessimistic_batches_for_oom(
                     f"(={crit_values[criterion]}) ..."
                 )
             raise
+    # exit()
 
 
 def main():
     parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
+    AsrDataModule.add_arguments(parser)
     args = parser.parse_args()
     args.exp_dir = Path(args.exp_dir)
 

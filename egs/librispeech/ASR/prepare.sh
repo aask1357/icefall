@@ -6,8 +6,8 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 set -eou pipefail
 
 nj=15
-stage=-1
-stop_stage=100
+stage=3
+stop_stage=4
 
 # We assume dl_dir (download dir) contains the following
 # directories and files. If not, they will be downloaded
@@ -36,7 +36,8 @@ stop_stage=100
 #     - music
 #     - noise
 #     - speech
-dl_dir=$PWD/download
+# dl_dir=$PWD/download
+dl_dir=/home/shahn/Datasets
 
 . shared/parse_options.sh || exit 1
 

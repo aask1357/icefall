@@ -31,11 +31,13 @@ from typing import Optional
 
 import sentencepiece as spm
 import torch
+import numpy as np
 from filter_cuts import filter_cuts
 from lhotse import CutSet, Fbank, FbankConfig, LilcomChunkyWriter
 from lhotse.recipes.utils import read_manifests_if_cached
 
 from icefall.utils import get_executor, str2bool
+from local.custom_fbank import CustomFbank, CustomFbankConfig
 
 # Torch's multithreaded behavior needs to be disabled or
 # it wastes a lot of CPU and slow things down.
@@ -78,6 +80,7 @@ def compute_fbank_librispeech(
 ):
     src_dir = Path("data/manifests")
     output_dir = Path("data/fbank")
+    # output_dir = Path("data/fbank_abs_8k")
     num_jobs = min(15, os.cpu_count())
     num_mel_bins = 80
 
@@ -116,7 +119,7 @@ def compute_fbank_librispeech(
         dataset_parts,
     )
 
-    extractor = Fbank(FbankConfig(num_mel_bins=num_mel_bins))
+    extractor = CustomFbank(CustomFbankConfig(num_mel_bins=num_mel_bins))
 
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, m in manifests.items():
@@ -149,6 +152,23 @@ def compute_fbank_librispeech(
                 storage_type=LilcomChunkyWriter,
             )
             cut_set.to_file(output_dir / cuts_filename)
+            # import matplotlib.pyplot as plt
+            # for cut in cut_set:
+            #     feat = cut.features
+            #     f = feat.load().astype(np.float32)
+            #     im = plt.imshow(f.transpose(), origin='lower', aspect='auto', interpolation='nearest')
+            #     plt.colorbar(im)
+            #     plt.savefig(f"delete_it.png")
+            #     plt.clf()
+            #     breakpoint()
+            feature_stats = cut_set.compute_global_feature_stats()
+            mean_c = feature_stats["norm_means"]
+            std_c = feature_stats["norm_stds"]
+            mean = np.mean(mean_c)
+            std = np.sqrt(
+                np.mean(std_c ** 2 + mean_c ** 2) - mean ** 2
+            )
+            print(partition, mean, std)
 
 
 if __name__ == "__main__":

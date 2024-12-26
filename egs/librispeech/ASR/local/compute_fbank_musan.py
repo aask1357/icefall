@@ -32,6 +32,7 @@ from lhotse import CutSet, Fbank, FbankConfig, LilcomChunkyWriter, MonoCut, comb
 from lhotse.recipes.utils import read_manifests_if_cached
 
 from icefall.utils import get_executor
+from local.custom_fbank import CustomFbank, CustomFbankConfig
 
 # Torch's multithreaded behavior needs to be disabled or
 # it wastes a lot of CPU and slow things down.
@@ -48,6 +49,7 @@ def is_cut_long(c: MonoCut) -> bool:
 def compute_fbank_musan():
     src_dir = Path("data/manifests")
     output_dir = Path("data/fbank")
+    # output_dir = Path("data/fbank_abs_8k")
     num_jobs = min(15, os.cpu_count())
     num_mel_bins = 80
 
@@ -81,7 +83,7 @@ def compute_fbank_musan():
 
     logging.info("Extracting features for Musan")
 
-    extractor = Fbank(FbankConfig(num_mel_bins=num_mel_bins))
+    extractor = CustomFbank(CustomFbankConfig(num_mel_bins=num_mel_bins))
 
     with get_executor() as ex:  # Initialize the executor only once.
         # create chunks of Musan with duration 5 - 10 seconds

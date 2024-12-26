@@ -11,6 +11,9 @@ log
 *.bak
 *-bak
 *bak.py
+tensorboard
+.ipynb_checkpoints
+fast_beam_search
 
 # Ignore c++ build files
 build

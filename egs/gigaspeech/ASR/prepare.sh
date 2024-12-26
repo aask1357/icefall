@@ -6,8 +6,8 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 set -eou pipefail
 
 nj=15
-stage=0
-stop_stage=100
+stage=5
+stop_stage=5
 
 # Split XL subset to a number of pieces (about 2000)
 # This is to avoid OOM during feature extraction.

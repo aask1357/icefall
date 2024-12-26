@@ -352,23 +352,35 @@ class EMA(nn.Module):
         
         self.cache = torch.empty(0)
         self.use_cache = use_cache
+        self.weight_reparameterized = False
+    
+    @torch.no_grad()
+    def remove_weight_reparameterizations(self) -> None:
+        gamma = self.get_weight()
+        self.weight = nn.Parameter(gamma)
+        self.weight_reparameterized = True
+    
+    def get_weight(self) -> Tensor:
+        if self.weight_reparameterized:
+            return self.weight
+        return self.r_max * torch.sigmoid(self.weight).view(self.channels, 1)
     
     def empty_cache(self):
         self.cache = torch.empty(0)
 
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, T]
-        gamma = self.r_max * torch.sigmoid(self.weight)     # [C]
-        gamma = gamma.unsqueeze(1)  # [C, 1]
+        gamma = self.get_weight()
         
         x = x * (1.0 - gamma.view(1, self.channels, 1))     # [B, C, T]
         if self.reversed:
             x = x.flip(2)
         
         out = x.new_zeros(x.size(0), self.channels, x.size(2)+1)    # [B, C, T+1]
-        B = min(self.cache.size(0), x.size(0))
-        if B > 0:
-            out[:B, :, :1] = self.cache[:B, :, :1]
+        if self.use_cache:
+            B = min(self.cache.size(0), x.size(0))
+            if B > 0:
+                out[:B, :, :1] = self.cache[:B, :, :1]
         x = iir(x, gamma, out)       # [B, C, T]
         if self.use_cache:
             self.cache = x.detach()[:, :, -1:]

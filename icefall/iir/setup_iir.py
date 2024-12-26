@@ -19,7 +19,7 @@ setup(
 )
 
 # USAGE:
-# $ python setup.py build_ext --inplace
+# $ python setup_iir.py build_ext --inplace
 
 # If error occurs (ex. cannot find -lcudart: No such file or directory)
 # try downlaoding & installing cuda toolkit from https://developer.nvidia.com/cuda-toolkit-archive

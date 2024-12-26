@@ -1778,8 +1778,16 @@ def parse_hyp_and_timestamp(
             words = [word_table[i] for i in res.hyps[i]]
         else:
             tokens = sp.id_to_piece(res.hyps[i])
-            words = sp.decode_pieces(tokens).split()
+            # <unk> \in tokens, remove it. Even if we don't separator, whitespace will
+            # be inserted between <unk>. For example,
+            # $ sp = SentencePieceProcessor(seperator='')
+            # $ sp.decode_pieces([a, b, <unk>, c])
+            # expected: 'ab⁇c'
+            # result: 'ab ⁇ c'
+            words = sp.decode_pieces(tokens).replace(' ⁇ ', '').split()
             time = parse_timestamp(tokens, time)
+        if len(time) != len(words):
+            breakpoint()
         assert len(time) == len(words), (len(time), len(words))
 
         hyps.append(words)

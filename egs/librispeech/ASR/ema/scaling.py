@@ -26,6 +26,7 @@ import torch.nn as nn
 from torch import _VF, Tensor
 
 from icefall.utils import is_jit_tracing
+from chip_fp16 import Q
 
 
 def _ntuple(n):
@@ -276,6 +277,7 @@ class ScaledLinear(nn.Linear):
         self._reset_parameters(
             initial_speed
         )  # Overrides the reset_parameters in nn.Linear
+        Q(self)
 
     def _reset_parameters(self, initial_speed: float):
         std = 0.1 / initial_speed
@@ -289,6 +291,7 @@ class ScaledLinear(nn.Linear):
             self.weight_scale += torch.tensor(scale / std).log()
 
     def get_weight(self):
+        self.weight_scale.data.clamp_(min=-10, max=2)
         return self.weight * self.weight_scale.exp()
 
     def get_bias(self):
@@ -323,6 +326,7 @@ class ScaledConv1d(nn.Conv1d):
         self._reset_parameters(
             initial_speed
         )  # Overrides the reset_parameters in base class
+        Q(self)
 
     def _reset_parameters(self, initial_speed: float):
         std = 0.1 / initial_speed
@@ -336,6 +340,7 @@ class ScaledConv1d(nn.Conv1d):
             self.weight_scale += torch.tensor(scale / std).log()
 
     def get_weight(self):
+        self.weight_scale.data.clamp_(min=-10, max=2)
         return self.weight * self.weight_scale.exp()
 
     def get_bias(self):
@@ -405,6 +410,7 @@ class ScaledConv2d(nn.Conv2d):
             self.weight_scale += torch.tensor(scale / std).log()
 
     def get_weight(self):
+        self.weight_scale.data.clamp_(min=-10, max=2)
         return self.weight * self.weight_scale.exp()
 
     def get_bias(self):
@@ -551,6 +557,7 @@ class ScaledLSTM(nn.LSTM):
         """Get scaled weights, and resets their data pointer."""
         flat_weights = []
         for idx in range(len(self._flat_weights_names)):
+            self._scales[idx].data.clamp_(min=-10, max=2)
             flat_weights.append(self._flat_weights[idx] * self._scales[idx].exp())
         self._flatten_parameters(flat_weights)
         return flat_weights
@@ -840,6 +847,7 @@ class ScaledEmbedding(nn.Module):
 
     def forward(self, input: Tensor) -> Tensor:
         F = torch.nn.functional
+        self.scale.data.clamp_(min=-10, max=2)
         scale = self.scale.exp()
         if input.numel() < self.num_embeddings:
             return (
