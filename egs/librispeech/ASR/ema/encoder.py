@@ -200,10 +200,12 @@ class ConvBlock(nn.Module):
         gamma: float = 0.9,
         use_cache: bool = False,
         chunksize: int = 16,
+        scale_limit: float = 2.0,
     ) -> None:
         super(ConvBlock, self).__init__()
         self.scaled_conv = scaled_conv
         self.norm = norm
+        self.scale_limit = scale_limit
         
         bias = True
         if norm == "BatchNorm":
@@ -361,7 +363,7 @@ class ConvBlock(nn.Module):
         x = self.dropout(x)
         
         if self.scale is not None:
-            self.scale.data.clamp_(min=-2, max=2)
+            self.scale.data.clamp_(min=-self.scale_limit, max=self.scale_limit)
             x = torch.addcmul(inputs, x, self.scale)    # x = inputs + x * self.scale
         elif warmup < 1:
             x = torch.add(inputs, x, alpha=warmup)      # x = inputs + x * warmup
@@ -509,6 +511,7 @@ class Encoder(EncoderInterface):
         std: float = 4.354657227491409,
         chip_fp16: bool = False,
         chunksize: int = 16,
+        scale_limit: float = 2.0,
     ) -> None:
         super().__init__()
 
@@ -550,7 +553,7 @@ class Encoder(EncoderInterface):
                 channels, channels_expansion, kernel_size, dilation,
                 activation, activation_kwargs, norm, dropout, se_activation,
                 scaled_conv, act_bal, zero_init_residual, se_gate, gamma=gamma,
-                use_cache=use_cache, chunksize=chunksize,
+                use_cache=use_cache, chunksize=chunksize, scale_limit=scale_limit
             )
             self.cnn.append(layer)
         self.proj = Conv(channels * 2, output_channels, 1, bias=False)

@@ -185,6 +185,33 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--whitener",
+        type=str2bool,
+        default=True,
+        help="Not Used. Ignore it.",
+    )
+
+    parser.add_argument(
+        "--scale-limit",
+        type=float,
+        default=2.0,
+    )
+
+    parser.add_argument(
+        "--weight-norm",
+        type=str2bool,
+        default=True,
+        help="Not Used. Ignore it.",
+    )
+
+    parser.add_argument(
+        "--logit-no-bias",
+        type=str2bool,
+        default=False,
+        help="Not Used. Ignore it.",
+    )
+
+    parser.add_argument(
         "--conv1d-subsampling-version",
         type=int,
         default=2,
@@ -318,6 +345,13 @@ def get_parser():
         "--weight-decay",
         type=float,
         default=1e-3,
+    )
+
+    parser.add_argument(
+        "--weight-decay-projection",
+        type=float,
+        default=1e-5,
+        help="Not Used. Ignore it.",
     )
 
     parser.add_argument(
@@ -559,6 +593,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         mean=params.encoder_mean,
         std=params.encoder_std,
         chunksize=params.chunksize,
+        scale_limit=params.scale_limit,
     )
     return encoder
 

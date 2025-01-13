@@ -16,7 +16,7 @@ from icefall.checkpoint import (
 from icefall.utils import add_sos
 from local.custom_fbank import CustomFbank, CustomFbankConfig
 
-from asr_datamodule import LibriSpeechAsrDataModule
+from asr_datamodule import AsrDataModule
 from decode import get_parser
 from train import get_params, get_transducer_model
 from keyword_spotting import get_model
@@ -26,22 +26,23 @@ from chip_fp16 import Q, q, FP16
 print(f"fp16: {FP16}")
 device = torch.device("cuda")
 parser = get_parser()
-LibriSpeechAsrDataModule.add_arguments(parser)
+AsrDataModule.add_arguments(parser)
 args = parser.parse_args()
 args.exp_dir = Path(args.exp_dir)
 
 MODEL = "ema"
 EXP = "small"
+EXP = "eng/l11_noemawd"
 
 args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/{MODEL}/{EXP}")
 args.channels = 256
 args.channels_expansion = 1024
-args.encoder_dim = 256
+args.encoder_dim = 512
 args.decoder_dim = 256
 args.joiner_dim = 256
-args.dilations_version = 12
-args.avg = 32
-args.epoch = 182
+args.dilations_version = 11
+args.avg = 64
+args.epoch = 200
 args.use_averaged_model = True
 args.update_bn = True
 
@@ -144,7 +145,7 @@ model.encoder.remove_weight_reparameterizations()
 # Encoder
 with torch.no_grad():
     z = torch.zeros(400 - hop + hop*4, device=device)
-    z = fbank.extract_batch(z.view(1, -1))  # [1, 4, 80]
+    z = fbank.extract_batch(z.view(1, -1))[0].unsqueeze(0)  # [1, 4, 80]
     z = z.transpose(1, 2)                   # [1, 80, 4]
     z = (z + 6.375938187300722) * 0.22963919954179052
     cache = q(model.encoder.conv_pre.conv[0](z)).squeeze(0)
@@ -177,10 +178,11 @@ with open("param.buf", 'wb') as f:
         f.write(np.ascontiguousarray(q(param.detach()).cpu().numpy()).tobytes())
         if idx == 0:
             print(f'		load(enc + "{name}", {", ".join(list(str(s) for s in param.shape))});')
-    fwrite(fbank.ft_weight, "fourier_transform")
+    # fwrite(fbank.ft_weight, "fourier_transform")
     fwrite(fbank.mel_fbank, "mel_filterbank")
     fwrite(model.encoder.conv_pre.conv[0].weight, "enc.conv_pre.0.weight")
-    fwrite(model.encoder.conv_pre.conv[1].weight, "enc.conv_pre.1.weight")
+    # fwrite(model.encoder.conv_pre.conv[1].weight, "enc.conv_pre.1.weight")
+    fwrite(model.encoder.conv_pre.conv[1].weight.squeeze(1).transpose(0, 1), "enc.conv_pre.1.weight")
     fwrite(model.encoder.conv_pre.conv[1].bias, "enc.conv_pre.1.bias")
     for idx, block in enumerate(model.encoder.cnn):
         CH = 1024

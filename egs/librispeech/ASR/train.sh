@@ -34,10 +34,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --data-zeroth-test False \
     --data-command-nor-train False \
     --data-freetalk-nor-train False \
-    --on-the-fly-feats True \
+    --on-the-fly-feats False \
     --bpe-model /home/shahn/Documents/icefall/egs/librispeech/ASR/data/lang_bpe_500/bpe.model \
     --cutset-text text \
-    --num-workers 24 \
+    --num-workers 2 \
     --simple-loss-scale 0.5
     # --subsampling-factor 4 \
     # --whitener False \

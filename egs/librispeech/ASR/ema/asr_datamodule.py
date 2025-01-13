@@ -623,28 +623,28 @@ class AsrDataModule:
         logging.info("About to get ksponspeech-eval-clean cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "ksponspeech_cuts_eval_clean.jsonl.gz"
-        ).modify_ids(lambda id: f"ksp-dev-{id}")
+        ).modify_ids(lambda id: f"ksp-eval-clean-{id}")
 
     @lru_cache()
     def ksponspeech_eval_other_cuts(self) -> CutSet:
         logging.info("About to get ksponspeech-eval-other cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "ksponspeech_cuts_eval_other.jsonl.gz"
-        ).modify_ids(lambda id: f"ksp-dev-{id}")
+        ).modify_ids(lambda id: f"ksp-eval-other-{id}")
 
     @lru_cache()
     def zeroth_train_cuts(self) -> CutSet:
         logging.info("About to get zeroth-train cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "zeroth_wav_cuts_train.jsonl.gz"
-        ).modify_ids(lambda id: f"zeroth-{id}")
+        ).modify_ids(lambda id: f"zeroth-train-{id}")
 
     @lru_cache()
     def zeroth_test_cuts(self) -> CutSet:
         logging.info("About to get zeroth-test cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "zeroth_wav_cuts_test.jsonl.gz"
-        ).modify_ids(lambda id: f"zeroth-{id}")
+        ).modify_ids(lambda id: f"zeroth-test-{id}")
 
     @lru_cache()
     def command_nor_train_cuts(self) -> CutSet:
