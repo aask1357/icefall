@@ -1,1 +1,0 @@
-/home/shahn/Documents/icefall/egs/librispeech/ASR/local/custom_fbank.py

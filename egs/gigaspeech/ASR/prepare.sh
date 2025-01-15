@@ -6,8 +6,8 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 set -eou pipefail
 
 nj=15
-stage=5
-stop_stage=5
+stage=6
+stop_stage=7
 
 # Split XL subset to a number of pieces (about 2000)
 # This is to avoid OOM during feature extraction.
@@ -131,6 +131,8 @@ if [ $stage -le 2 ] && [ $stop_stage -ge 2 ]; then
 fi
 
 if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
+  # 1. cuts.supervisions.text를 filter
+  # 2. cuts = cuts + cuts.perturb_speed(0.9) + cuts.perturb_speed(1.1) (TRAIN만, DEV랑 TEST는 x)
   log "State 3: Preprocess GigaSpeech manifest"
   if [ ! -f data/fbank/.preprocess_complete ]; then
    python3 ./local/preprocess_gigaspeech.py
@@ -144,6 +146,8 @@ if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
 fi
 
 if [ $stage -le 5 ] && [ $stop_stage -ge 5 ]; then
+  # 6번에서 TRAIN의 Fbank 추출할 때 메모리 부족으로 OOM이 발생할 수 있음
+  # 그래서 cutset을 여러 개로 나눠놓음.
   log "Stage 5: Split XL subset into pieces (may take 30 minutes)"
   split_dir=data/fbank/XL_split
   if [ ! -f $split_dir/.split_completed ]; then

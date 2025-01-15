@@ -1,11 +1,11 @@
-model="ema_noscale"
-exp="korean/vocab500_ipa3_l11_customfbank_adamp_wd1e-2"
+model="ema_cba_new"
+exp="korean/${model}_eve_wd1e-3"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
     --start-epoch 1 \
-    --exp-dir ${model}/$exp \
+    --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2432 \
     --master-port 54321 \
@@ -17,7 +17,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
-    --act-bal False \
+    --act-bal True \
     --whitener False \
     --zero-init-residual True \
     --se-gate tanh \
@@ -29,9 +29,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --optimizer-name AdamP \
-    --weight-decay 0.01 \
-    --weight-decay-projection 1.0e-6 \
+    --logit-no-bias False \
+    --optimizer-name Eve \
+    --weight-decay 0.001 \
+    --weight-decay-projection 1.0e-5 \
     --data-libri-train False \
     --data-libri-dev-clean False \
     --data-libri-dev-other False \
@@ -47,8 +48,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --num-workers 24 \
     --simple-loss-scale 0.5
     # --subsampling-factor 4 \
-    # --whitener False \
-    # --weight-norm True \
     # --dec-residual False \
     # --subsampling-factor 4 \
     # --encoder-mean -6.883708542616444 \
