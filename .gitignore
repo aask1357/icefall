@@ -15,6 +15,15 @@ tensorboard
 .ipynb_checkpoints
 fast_beam_search
 
+# Ignore script
+train.sh
+train_adamp.sh
+train_korean_adamw.sh
+test_old.sh
+test_big.sh
+test_ipa3.sh
+test.sh
+
 # Ignore c++ build files
 build
 *.so

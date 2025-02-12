@@ -2,6 +2,7 @@ import logging
 
 import torch
 from torch import nn
+from lhotse.cut import CutSet
 
 from asr_datamodule import AsrDataModule
 
@@ -20,11 +21,26 @@ def update_bn(model: nn.Module, args, sp) -> None:
     
     # prepare train dataset
     datamodule = AsrDataModule(args)
-    # train_cuts = datamodule.train_clean_100_cuts()
-    # train_cuts += datamodule.train_clean_360_cuts()
-    # train_cuts += datamodule.train_other_500_cuts()
-    train_cuts = datamodule.ksponspeech_train_cuts()
-    train_cuts += datamodule.zeroth_train_cuts()
+    train_cuts = CutSet()
+    if args.data_libri_train:
+        train_cuts += datamodule.train_clean_100_cuts()
+        if args.full_libri:
+            train_cuts += datamodule.train_clean_360_cuts()
+            train_cuts += datamodule.train_other_500_cuts()
+    if args.data_ksponspeech_train:
+        train_cuts += datamodule.ksponspeech_train_cuts()
+    if args.data_zeroth_train:
+        train_cuts += datamodule.zeroth_train_cuts()
+    if args.data_command_kid_train:
+        train_cuts += datamodule.command_kid_train_cuts()
+    if args.data_command_nor_train:
+        train_cuts += datamodule.command_nor_train_cuts()
+    if args.data_command_old_train:
+        train_cuts += datamodule.command_old_train_cuts()
+    if args.data_freetalk_kid_train:
+        train_cuts += datamodule.freetalk_kid_train_cuts()
+    if args.data_freetalk_nor_train:
+        train_cuts += datamodule.freetalk_nor_train_cuts()
     
     def remove_short_and_long_utt(c):
         # Keep only utterances with duration between 1 second and 20 seconds
