@@ -1,11 +1,12 @@
 import matplotlib.pyplot as plt
 from pathlib import Path
 import math
+import os
 
 import numpy as np
 import torch
 from torch.nn import functional as F
-import librosa
+from scipy.io import wavfile
 import sentencepiece as spm
 from icefall.checkpoint import (
     average_checkpoints,
@@ -17,7 +18,7 @@ from icefall.utils import add_sos
 from local.custom_fbank import CustomFbank, CustomFbankConfig
 
 from asr_datamodule import AsrDataModule
-from decode import get_parser
+from decode_korean import get_parser
 from train import get_params, get_transducer_model
 from keyword_spotting import get_model
 from update_bn import update_bn
@@ -30,22 +31,25 @@ AsrDataModule.add_arguments(parser)
 args = parser.parse_args()
 args.exp_dir = Path(args.exp_dir)
 
-EXP = "ja/ema_scaledbn"
+MODEL = "ema"
+EXP = "korean/vocab500_ipa_do_sl0.5"
+EXP = "korean/vocab500_ipa_do_sl0.5_l11_customfbank"
 
-args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/exp/{EXP}")
+args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/{MODEL}/{EXP}")
+args.avg = 32 #32
+args.epoch = 97 #121
 args.channels = 256
 args.channels_expansion = 1024
 args.encoder_dim = 512
 args.decoder_dim = 256
 args.joiner_dim = 256
 args.dilations_version = 11
-args.avg = 16
-args.epoch = 48
+args.encoder_dropout = 0.075
 args.use_averaged_model = True
 args.update_bn = True
-args.data_reazonspeech_train = True
-args.max_duration = 600
-BLANK_PENALTY = 4.0
+args.on_the_fly_feats = True
+args.bpe_model = "/home/shahn/Documents/icefall_github/egs/ksponspeech/ASR/data/lang_bpe_500_ipa_max3/bpe.model"
+args.cutset_text = "custom.ipa_filtered"
 
 params = get_params()
 params.update(vars(args))
@@ -57,19 +61,32 @@ params.unk_id = sp.PieceToId("<unk>")
 params.vocab_size = sp.GetPieceSize()
 
 model = get_transducer_model(params)
+# get_model(params, model, device, args, sp, f"ema/kws_abs/epoch-120-avg-{args.avg}.pt")
+# torch.save(
+#     {
+#         'model': model.state_dict(),
+#         'description': (
+#             f"exp=ema/kws_abs, epoch=120, avg={args.avg}, use-averaged-model=True, "
+#             "se-gate=tanh, ema-gamma=0.93"
+#         ),
+#     }, f"ema/kws_abs/epoch-120-avg-{args.avg}.pt"
+# )
 avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}.pt")
 get_model(params, model, device, args, sp, avg_path)
-torch.save(
-    {
-        'model': model.state_dict(),
-        'description': (
-            f"exp=exp/{EXP}, epoch={args.epoch}, avg={args.avg}, use-averaged-model=True, "
-            "se-gate=tanh, ema-gamma=0.93"
-        ),
-    }, avg_path
-)
+if not os.path.exists(avg_path):
+    torch.save(
+        {
+            'model': model.state_dict(),
+            'description': (
+                f"exp={MODEL}/{EXP}, epoch={args.epoch}, avg={args.avg}, use-averaged-model=True, "
+                "se-gate=tanh, ema-gamma=0.93"
+            ),
+        }, avg_path
+    )
 
-x, _ = librosa.load("/home/shahn/Datasets/jsut_ver1.1/basic5000/wav/BASIC5000_4936.wav", sr=16_000)
+sr, x = wavfile.read("/home/shahn/Datasets/aihub/명령어 음성(일반남녀)/wav_16khz/Training/f_0325/f_0325-5015-01-02-LGE-F-07-A.wav")
+assert sr == 16_000, sr
+x = (x / 2**15).astype(np.float32)
 
 hop = 160
 window = 400
@@ -117,6 +134,19 @@ y = (y + 6.375938187300722) * 0.22963919954179052
 with open("output.buf", "wb") as f:
     f.write(np.ascontiguousarray(y.cpu().numpy()).tobytes())
 
+# im = plt.imshow(y.squeeze(0).transpose(0,1).cpu().numpy(), interpolation='nearest', aspect='auto', origin='lower')
+# plt.colorbar(im)
+# plt.savefig("ema/delete_it1.png")
+# plt.clf()
+# im = plt.imshow(spec_fbank.squeeze(0).transpose(0,1).cpu().numpy(), interpolation='nearest', aspect='auto', origin='lower')
+# plt.colorbar(im)
+# plt.savefig("ema/delete_it2.png")
+# plt.clf()
+# im = plt.imshow((y - spec_fbank).squeeze(0).transpose(0,1).cpu().numpy(), interpolation='nearest', aspect='auto', origin='lower')
+# plt.colorbar(im)
+# plt.savefig("ema/delete_it3.png")
+# exit()
+
 cache_file = open("cache.buf", "wb")
 model.encoder.remove_weight_reparameterizations()
 # Encoder
@@ -128,16 +158,25 @@ with torch.no_grad():
     cache = q(model.encoder.conv_pre.conv[0](z)).squeeze(0)
     print(f'	load("cache_conv_pre", {", ".join(list(str(s) for s in cache.shape))});')
     cache_file.write(np.ascontiguousarray(cache.cpu().numpy()).tobytes())
+    # z = model.encoder.conv_pre.conv[0](y.transpose(1, 2))
+    # conv = model.encoder.conv_pre.conv[1]
+    # z = F.conv1d(torch.cat([cache, z], dim=2), conv.weight, None, stride=4, groups=384).squeeze(0)
+    # print(f"output shape: {z.shape}")
+    # with open("output.buf", "wb") as f:
+    #     f.write(np.ascontiguousarray(z.numpy()).tobytes())
     for idx, block in enumerate(model.encoder.cnn):
         cache = q(block.initial_cache.clone()).squeeze(0)
         if idx == 0:
             print(f'		load(enc + "depthwise", {", ".join(list(str(s) for s in cache.shape))});')
         cache_file.write(np.ascontiguousarray(cache.cpu().numpy()).tobytes())
+    # z = y.squeeze(0).transpose(0, 1)
     z, *_ = model.encoder(x=y, x_lens=torch.tensor([y.size(1)], device=device, dtype=torch.int64))
 
 with torch.no_grad():
     z2, *_ = model.encoder(x=y, x_lens=torch.tensor([y.size(1)], device=device, dtype=torch.int64))
-
+# im = plt.imshow((z2-z).squeeze(0).cpu().numpy(), interpolation='nearest', aspect='auto', origin='lower')
+# plt.colorbar(im)
+# plt.savefig("ema/delete_it.png")
 with open("param.buf", 'wb') as f:
     def fwrite(param: torch.Tensor, name: str):
         f.write(np.ascontiguousarray(q(param.detach()).cpu().numpy()).tobytes())
@@ -146,8 +185,10 @@ with open("param.buf", 'wb') as f:
         f.write(np.ascontiguousarray(q(param.detach()).cpu().numpy()).tobytes())
         if idx == 0:
             print(f'		load(enc + "{name}", {", ".join(list(str(s) for s in param.shape))});')
+    # fwrite(fbank.ft_weight, "fourier_transform")
     fwrite(fbank.mel_fbank, "mel_filterbank")
     fwrite(model.encoder.conv_pre.conv[0].weight, "enc.conv_pre.0.weight")
+    # fwrite(model.encoder.conv_pre.conv[1].weight, "enc.conv_pre.1.weight")
     fwrite(model.encoder.conv_pre.conv[1].weight.squeeze(1).transpose(0, 1), "enc.conv_pre.1.weight")
     fwrite(model.encoder.conv_pre.conv[1].bias, "enc.conv_pre.1.bias")
     for idx, block in enumerate(model.encoder.cnn):
@@ -178,6 +219,7 @@ with open("param.buf", 'wb') as f:
     w = model.decoder.embedding.weight.data
     scale = model.decoder.embedding.scale.exp().data
     w = w * scale               # [VOCAB_SIZE, C]
+    # w = F.pad(w, (0, 0, 0, 1))  # [VOCAB_SIZE+1, C] -> embedding[VOCAB_SIZE] = 0 vector
     fwrite(w, "dec.embedding.weight")
     w1 = model.decoder.conv.get_weight().data
     fwrite(w1, "dec.conv1.weight")
@@ -185,8 +227,6 @@ with open("param.buf", 'wb') as f:
     fwrite(w2, "dec.conv2.weight")
     fwrite(model.joiner.decoder_proj.get_bias(), "dec.conv2.bias")
     fwrite(model.joiner.output_linear.get_weight(), "dec.conv3.weight")
-    bias = model.joiner.output_linear.get_bias()
-    bias[0] -= BLANK_PENALTY
-    fwrite(bias, "dec.conv3.bias")
-
+    fwrite(model.joiner.output_linear.get_bias(), "dec.conv3.bias")
+    
 cache_file.close()

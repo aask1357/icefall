@@ -209,10 +209,13 @@ class ConvBlock(nn.Module):
         self.norm = norm
         self.scale_limit = scale_limit
         
+        bias = True
         if norm == "BatchNorm":
             Norm = ScaledBatchNorm1d
+            bias = False
         elif norm == "SyncBatchNorm":
             Norm = ScaledSyncBatchNorm
+            bias = False
         elif norm == "BasicNorm":
             Norm = BasicNorm
         else:

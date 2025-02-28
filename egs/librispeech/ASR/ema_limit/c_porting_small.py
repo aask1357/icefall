@@ -30,7 +30,7 @@ AsrDataModule.add_arguments(parser)
 args = parser.parse_args()
 args.exp_dir = Path(args.exp_dir)
 
-EXP = "ja/ema_scaledbn"
+EXP = "ja/ema_limit1"
 
 args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/exp/{EXP}")
 args.channels = 256
@@ -45,7 +45,8 @@ args.use_averaged_model = True
 args.update_bn = True
 args.data_reazonspeech_train = True
 args.max_duration = 600
-BLANK_PENALTY = 4.0
+args.bpe_model = "/home/shahn/Documents/icefall_github/egs/reazonspeech/ASR/data/lang_bpe_500_hiragana_filtered/bpe.model"
+BLANK_PENALTY = 3.0
 
 params = get_params()
 params.update(vars(args))
