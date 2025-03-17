@@ -690,6 +690,7 @@ def main():
         params.suffix = f"iter-{params.iter}-avg-{params.avg}"
     else:
         params.suffix = f"epoch-{params.epoch}-avg-{params.avg}"
+    params.suffix += f"-bp-{params.blank_penalty}"
 
     if "fast_beam_search" in params.decoding_method:
         params.suffix += f"-beam-{params.beam}"
@@ -734,10 +735,10 @@ def main():
     from keyword_spotting import get_model
     avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}.pt")
     get_model(params, model, device, args, sp, avg_path)
-    with torch.no_grad():
-        offset = params.blank_penalty / model.joiner.output_linear.bias_scale.exp()
-        model.joiner.output_linear.bias[0] -= offset
-        params.blank_penalty = 0.0
+    # with torch.no_grad():
+    #     offset = params.blank_penalty / model.joiner.output_linear.bias_scale.exp()
+    #     model.joiner.output_linear.bias[0] -= offset
+    #     params.blank_penalty = 0.0
 
     if "fast_beam_search" in params.decoding_method:
         if params.decoding_method == "fast_beam_search_nbest_LG":
@@ -776,6 +777,10 @@ def main():
         cuts = datamodule.ksponspeech_eval_other_cuts()
         test_dl.append(datamodule.test_dataloaders(cuts))
         test_sets.append("ksponspeech-eval-other")
+    if args.data_reazonspeech_medium_test:
+        cuts = datamodule.reazonspeech_medium_test_cuts()
+        test_dl.append(datamodule.test_dataloaders(cuts))
+        test_sets.append("reazonspeech-medium-test")
     if args.data_reazonspeech_large_test:
         cuts = datamodule.reazonspeech_large_test_cuts()
         test_dl.append(datamodule.test_dataloaders(cuts))
@@ -784,6 +789,10 @@ def main():
         cuts = datamodule.jsut_basic5000_cuts()
         test_dl.append(datamodule.test_dataloaders(cuts))
         test_sets.append("jsut-basic5000")
+    if args.data_jsut_basic5000_sudachi:
+        cuts = datamodule.jsut_basic5000_sudachi_cuts()
+        test_dl.append(datamodule.test_dataloaders(cuts))
+        test_sets.append("jsut-basic5000-sudachi")
 
     for test_set, test_dl in zip(test_sets, test_dl):
         results_dict = decode_dataset(

@@ -215,6 +215,24 @@ class AsrDataModule:
             help="When enabled, use Freetalk-Normal for training.",
         )
         group.add_argument(
+            "--data-reazonspeech-medium-train",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-medium for training.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-medium-dev",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-dev for validation.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-medium-test",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-test for validation.",
+        )
+        group.add_argument(
             "--data-reazonspeech-large-train",
             type=str2bool,
             default=False,
@@ -237,6 +255,18 @@ class AsrDataModule:
             type=str2bool,
             default=False,
             help="When enabled, use JSUT-basic5000 for validation.",
+        )
+        group.add_argument(
+            "--data-jsut-basic5000-sudachi",
+            type=str2bool,
+            default=False,
+            help="When enabled, use JSUT-basic5000-Sudachi for validation.",
+        )
+        group.add_argument(
+            "--data-tedxjp-10k",
+            type=str2bool,
+            default=False,
+            help="When enabled, use TEDxJP-10K-v1.1 for validation.",
         )
 
         group.add_argument(
@@ -707,6 +737,27 @@ class AsrDataModule:
         ).modify_ids(lambda id: f"freetalk-kid-{id}")
 
     @lru_cache()
+    def reazonspeech_medium_train_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-train cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_train.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-train-{id}")
+
+    @lru_cache()
+    def reazonspeech_medium_dev_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-dev cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_dev.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-dev-{id}")
+
+    @lru_cache()
+    def reazonspeech_medium_test_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-test cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_test.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-test-{id}")
+
+    @lru_cache()
     def reazonspeech_large_train_cuts(self) -> CutSet:
         logging.info("About to get reazonspeech-large-train cuts")
         return load_manifest_lazy(
@@ -725,7 +776,7 @@ class AsrDataModule:
         logging.info("About to get reazonspeech-large-test cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "reazonspeech_large_cuts_test.jsonl.gz"
-        ).modify_ids(lambda id: f"reazonspeech-test-{id}")
+        ).modify_ids(lambda id: f"reazonspeech-large-test-{id}")
 
     @lru_cache()
     def jsut_basic5000_cuts(self) -> CutSet:
@@ -734,6 +785,20 @@ class AsrDataModule:
             self.args.manifest_dir / "jsut_basic5000_cuts.jsonl.gz"
         ).modify_ids(lambda id: f"jsut-basic5000-{id}")
 
+    @lru_cache()
+    def jsut_basic5000_sudachi_cuts(self) -> CutSet:
+        logging.info("About to get jsut-basic5000-sudachi cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "jsut_basic5000_sudachi_cuts.jsonl.gz"
+        ).modify_ids(lambda id: f"jsut-basic5000-sudachi-{id}")
+
+    @lru_cache()
+    def tedxjp_10k_cuts(self) -> CutSet:
+        logging.info("About to get TEDxJP-10K-v1.1 cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "tedxjp_10k_v1.1_cuts.jsonl.gz"
+        ).modify_ids(lambda id: f"tedxjp-10k-v1.1-{id}")
+
     # freetalk_old -> PCM data -> not implemented yet.
     # @lru_cache()
     # def freetalk_old_train_cuts(self) -> CutSet:
@@ -741,4 +806,3 @@ class AsrDataModule:
     #     return load_manifest_lazy(
     #         self.args.manifest_dir / "freetalk_old_cuts_train.jsonl.gz"
     #     )
-

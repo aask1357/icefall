@@ -30,7 +30,7 @@ AsrDataModule.add_arguments(parser)
 args = parser.parse_args()
 args.exp_dir = Path(args.exp_dir)
 
-EXP = "ja/ema_limit1"
+EXP = "ja/ema_limit1_m_katakana"
 
 args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/exp/{EXP}")
 args.channels = 256
@@ -39,14 +39,14 @@ args.encoder_dim = 512
 args.decoder_dim = 256
 args.joiner_dim = 256
 args.dilations_version = 11
-args.avg = 16
+args.avg = 30
 args.epoch = 48
 args.use_averaged_model = True
 args.update_bn = True
-args.data_reazonspeech_train = True
+args.data_reazonspeech_medium_train = True
 args.max_duration = 600
-args.bpe_model = "/home/shahn/Documents/icefall_github/egs/reazonspeech/ASR/data/lang_bpe_500_hiragana_filtered/bpe.model"
-BLANK_PENALTY = 3.0
+args.bpe_model = "/home/shahn/Documents/icefall_github/egs/reazonspeech/ASR/data/lang_bpe_500_katakana/bpe.model"
+BLANK_PENALTY = 4.0
 
 params = get_params()
 params.update(vars(args))
@@ -58,7 +58,7 @@ params.unk_id = sp.PieceToId("<unk>")
 params.vocab_size = sp.GetPieceSize()
 
 model = get_transducer_model(params)
-avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}.pt")
+avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}-bp-{BLANK_PENALTY:.1f}.pt")
 get_model(params, model, device, args, sp, avg_path)
 torch.save(
     {

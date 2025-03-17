@@ -1193,6 +1193,8 @@ def run(rank, world_size, args):
         train_cuts += datamodule.freetalk_nor_train_cuts()
     if params.data_reazonspeech_large_train:
         train_cuts += datamodule.reazonspeech_large_train_cuts()
+    if params.data_reazonspeech_medium_train:
+        train_cuts += datamodule.reazonspeech_medium_train_cuts()
 
     def remove_short_and_long_utt(c: Cut):
         # Keep only utterances with duration between 1 second and 20 seconds
@@ -1269,10 +1271,14 @@ def run(rank, world_size, args):
         valid_cuts_dict["kspon-dev"] = datamodule.ksponspeech_dev_cuts()
     if params.data_zeroth_test:
         valid_cuts_dict["zeroth-test"] = datamodule.zeroth_test_cuts()
+    if params.data_reazonspeech_medium_dev:
+        valid_cuts_dict["reazonspeech-dev"] = datamodule.reazonspeech_medium_dev_cuts()
     if params.data_reazonspeech_large_dev:
         valid_cuts_dict["reazonspeech-dev"] = datamodule.reazonspeech_large_dev_cuts()
     if params.data_jsut_basic5000:
         valid_cuts_dict["jsut-basic5000"] = datamodule.jsut_basic5000_cuts()
+    if params.data_tedxjp_10k:
+        valid_cuts_dict["tedxjp-10k-v1.1"] = datamodule.tedxjp_10k_cuts()
 
     for valid_cuts in valid_cuts_dict.values():
         validate(valid_cuts)

@@ -41,6 +41,8 @@ def update_bn(model: nn.Module, args, sp) -> None:
         train_cuts += datamodule.freetalk_kid_train_cuts()
     if args.data_freetalk_nor_train:
         train_cuts += datamodule.freetalk_nor_train_cuts()
+    if args.data_reazonspeech_medium_train:
+        train_cuts += datamodule.reazonspeech_medium_train_cuts()
     if args.data_reazonspeech_large_train:
         train_cuts += datamodule.reazonspeech_large_train_cuts()
     
