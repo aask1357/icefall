@@ -1,14 +1,14 @@
-model="ema_noscale_new"
-exp="korean/${model}_eve_wd1e-3"
-avg=1
-CUDA_VISIBLE_DEVICES=2 ${model}/decode_korean_cer.py \
-    --epoch 89 \
+model="ema_cba_new_2"
+exp="korean/${model}_nonormprepost_eve_wd1e-3"
+avg=32
+CUDA_VISIBLE_DEVICES=2 ${model}/decode_cer.py \
+    --epoch 120 \
     --iter 0 \
     --avg $avg \
     --exp-dir exp/$exp \
     --max-duration 600 \
     --decoding-method fast_beam_search \
-    --use-averaged-model False \
+    --use-averaged-model True \
     --update-bn True \
     --encoder-norm BatchNorm \
     --channels 256 \
@@ -30,6 +30,9 @@ CUDA_VISIBLE_DEVICES=2 ${model}/decode_korean_cer.py \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
     --logit-no-bias False \
+    --data-libri-train False \
+    --data-ksponspeech-train True \
+    --data-freetalk-nor-train True \
     --bpe-model /home/shahn/Documents/icefall_github/egs/ksponspeech/ASR/data/lang_bpe_500_ipa_max3/bpe.model \
     --cutset-text custom.ipa_filtered \
     --on-the-fly-feats True

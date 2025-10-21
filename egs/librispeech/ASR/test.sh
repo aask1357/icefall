@@ -1,12 +1,12 @@
-model="ema"
-exp="eng/l11_noemawd"
+model="ema_noscale_wholenew"
+exp="eng/${model}_chscale_limit2_simplewd"
 avg=64
 CUDA_VISIBLE_DEVICES=1 ${model}/decode.py \
     --epoch 200 \
     --iter 0 \
     --avg $avg \
-    --exp-dir ${model}/$exp \
-    --max-duration 200 \
+    --exp-dir exp/$exp \
+    --max-duration 600 \
     --decoding-method fast_beam_search \
     --use-averaged-model True \
     --update-bn True \

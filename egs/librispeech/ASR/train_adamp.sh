@@ -1,5 +1,5 @@
-model="ema_cba_new"
-exp="korean/${model}_eve_wd1e-3"
+model="ema_cba_new_2"
+exp="korean/${model}_nonormprepost_eve_wd1e-3"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \

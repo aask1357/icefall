@@ -213,40 +213,19 @@ class ConvBlock(nn.Module):
         
         if activation == "PReLU":
             activation_kwargs = {"num_parameters": 1}
-        elif act_bal:
-            activation_kwargs = {"inplace": False}
         else:
             activation_kwargs = {"inplace": True}
 
-        if act_bal:
-            ActBal = ActivationBalancer
-        else:
-            ActBal = nn.Identity
-        
         if whitener:
             Wht = Whiten
         else:
             Wht = nn.Identity
-        
+
         self.activation = getattr(nn, activation)(**activation_kwargs)
         self.whiten = Wht(
             num_groups=1, whitening_limit=5.0,
             prob=(0.025, 0.25), grad_scale=0.01)
         self.pointwise1 = Conv1d(channels, channels_hidden, 1, bias=bias)
-        self.act_bal = ActBal(
-            channels,
-            channel_dim=1, 
-            max_abs=10.0,
-            min_positive=0.05,
-            max_positive=1.0
-        )
-        self.act_bal_hidden = ActBal(
-            channels_hidden,
-            channel_dim=1, 
-            max_abs=10.0,
-            min_positive=0.05,
-            max_positive=1.0
-        )
         self.norm1 = Norm(channels_hidden)
         self.depthwise = CausalConv1d(
             channels_hidden, channels_hidden, kernel_size, groups=channels_hidden,
@@ -309,17 +288,14 @@ class ConvBlock(nn.Module):
 
         x = self.pointwise1(x)
         x = self.norm1(x)
-        x = self.act_bal_hidden(x)
         x = self.activation(x)
         if self.initial_cache is not None:
             x = torch.cat([self.initial_cache, x], dim=2)
         x = self.depthwise(x)
         x = self.norm2(x)
-        x = self.act_bal_hidden(x)
         x = self.activation(x)
         x = self.pointwise2(x)
         x = self.norm3(x)
-        x = self.act_bal(x)
         x = self.se(x)
         x = self.dropout(x)
         
@@ -332,32 +308,23 @@ class ConvBlock(nn.Module):
 
 class Conv1dSubsampling(nn.Module):
     def __init__(self, in_ch, out_ch, subsampling_factor,
-                 whitener, norm):
+                 whitener, weight_norm):
         super().__init__()
-        bias = True
-        if norm == "BatchNorm":
-            Norm = nn.BatchNorm1d
-            bias = False
-        elif norm == "SyncBatchNorm":
-            Norm = nn.SyncBatchNorm
-            bias = False
-        elif norm == "BasicNorm":
-            Norm = BasicNorm
-        else:
-            raise RuntimeError(f"invalid norm {norm}")
-
         if whitener:
             Wht = Whiten
         else:
             Wht = nn.Identity
         self.subsampling_factor = subsampling_factor
         sf = subsampling_factor
+        def norm(module):
+            if weight_norm:
+                return weight_norm_fn(module)
+            return module
         
-        self.pointwise = Conv1d(in_ch, out_ch, 1, bias=False)
-        self.depthwise = Conv1d(out_ch, out_ch, 2*sf, stride=sf, padding=0,
-                              groups=out_ch, bias=bias)
+        self.pointwise = norm(Conv1d(in_ch, out_ch, 1, bias=False))
+        self.depthwise = norm(Conv1d(out_ch, out_ch, 2*sf, stride=sf, padding=0,
+                              groups=out_ch, bias=True))
         self.whiten = Wht(num_groups=1, whitening_limit=2.0, prob=(0.025, 0.25), grad_scale=0.025)
-        self.norm = Norm(out_ch, affine=False)
     
     def remove_weight_reparameterizations(self):
         conv = self.pointwise
@@ -382,7 +349,6 @@ class Conv1dSubsampling(nn.Module):
         x = F.pad(x, (self.subsampling_factor, 0))
         x = self.depthwise(x)
         x = self.whiten(x)
-        x = self.norm(x)
         x_len = torch.floor(x_len / self.subsampling_factor)
         return x, x_len
 
@@ -428,7 +394,7 @@ class Encoder(EncoderInterface):
             channels,
             subsampling_factor=subsampling_factor,
             whitener=whitener,
-            norm=norm,
+            weight_norm=weight_norm,
         )
         self.is_pnnx = is_pnnx
 
@@ -442,21 +408,10 @@ class Encoder(EncoderInterface):
                 scale_limit=scale_limit, weight_norm=weight_norm,
             )
             self.cnn.append(layer)
-        
-        bias = True
-        if norm == "BatchNorm":
-            Norm = nn.BatchNorm1d
-            bias = False
-        elif norm == "SyncBatchNorm":
-            Norm = nn.SyncBatchNorm
-            bias = False
-        elif norm == "BasicNorm":
-            Norm = BasicNorm
-            bias = True
-        else:
-            raise RuntimeError(f"invalid norm {norm}")
-        self.proj = Conv1d(channels, output_channels, 1, bias=bias)
-        self.norm = Norm(output_channels, affine=False)
+
+        self.proj = Conv1d(channels, output_channels, 1, bias=False)
+        if weight_norm:
+            self.proj = weight_norm_fn(self.proj)
     
     @torch.no_grad()
     def remove_weight_reparameterizations(self):
@@ -501,7 +456,6 @@ class Encoder(EncoderInterface):
         for block in self.cnn:
             x, lengths = block(x, lengths)   # [batch_size, channels, time]
         x = self.proj(x)        # [batch_size, channels_out, time]
-        x = self.norm(x)
         x = x.transpose(1, 2)   # [B, T, C]
         return x, lengths, None
 

@@ -17,43 +17,43 @@ from scaling import (
 from chip_fp16 import Q, q
 
 
-# class Conv1d(nn.Conv1d):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         nn.init.kaiming_normal_(self.weight)
-#         if self.bias is not None:
-#             nn.init.zeros_(self.bias)
-#         Q(self)
+class Conv1d(nn.Conv1d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        nn.init.kaiming_normal_(self.weight)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+        Q(self)
 
 
-# class CausalConv1d(nn.Conv1d):
-#     def __init__(self, *args, use_cache=False, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         d, k, s = self.dilation[0], self.kernel_size[0], self.stride[0]
-#         self.causal_padding = d * (k - 1) - (s - 1)
-#         self.cache = torch.empty(0)
-#         self.use_cache = use_cache
-#         nn.init.kaiming_normal_(self.weight, mode='fan_out', nonlinearity='linear')
-#         if self.bias is not None:
-#             nn.init.zeros_(self.bias)
-#         Q(self)
+class CausalConv1d(nn.Conv1d):
+    def __init__(self, *args, use_cache=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        d, k, s = self.dilation[0], self.kernel_size[0], self.stride[0]
+        self.causal_padding = d * (k - 1) - (s - 1)
+        self.cache = torch.empty(0)
+        self.use_cache = use_cache
+        nn.init.kaiming_normal_(self.weight, mode='fan_out', nonlinearity='linear')
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+        Q(self)
     
-#     def empty_cache(self):
-#         self.cache = torch.empty(0)
+    def empty_cache(self):
+        self.cache = torch.empty(0)
 
-#     def forward(self, x: Tensor) -> Tensor:
-#         if self.use_cache:
-#             padding = x.new_zeros(x.size(0), x.size(1), self.causal_padding)
-#             B = min(self.cache.size(0), x.size(0))
-#             if B > 0:
-#                 padding[:B] = self.cache[:B]
-#             x = torch.cat((padding, x), dim=2)
-#             self.cache = x.detach()[:, :, -self.causal_padding:]
-#         else:
-#             x = F.pad(x, (self.causal_padding, 0))
-#         y = F.conv1d(x, self.weight, self.bias, self.stride, self.padding,
-#                      self.dilation, self.groups)
-#         return y
+    def forward(self, x: Tensor) -> Tensor:
+        if self.use_cache:
+            padding = x.new_zeros(x.size(0), x.size(1), self.causal_padding)
+            B = min(self.cache.size(0), x.size(0))
+            if B > 0:
+                padding[:B] = self.cache[:B]
+            x = torch.cat((padding, x), dim=2)
+            self.cache = x.detach()[:, :, -self.causal_padding:]
+        else:
+            x = F.pad(x, (self.causal_padding, 0))
+        y = F.conv1d(x, self.weight, self.bias, self.stride, self.padding,
+                     self.dilation, self.groups)
+        return y
 
 
 class CausalScaledConv1d(ScaledConv1d):
@@ -228,8 +228,8 @@ class ConvBlock(nn.Module):
         
         if activation == "PReLU":
             activation_kwargs = {"num_parameters": 1}
-        elif act_bal:
-            activation_kwargs = {"inplace": False}
+        # elif act_bal:
+        #     activation_kwargs = {"inplace": False}
         else:
             activation_kwargs = {"inplace": True}
 
@@ -247,10 +247,10 @@ class ConvBlock(nn.Module):
         self.whiten = Wht(
             num_groups=1, whitening_limit=5.0,
             prob=(0.025, 0.25), grad_scale=0.01)
-        self.pointwise1 = ScaledConv1d(channels, channels_hidden, 1, bias=bias)
+        self.pointwise1 = Conv1d(channels, channels_hidden, 1, bias=bias)
         self.act_bal = ActBal(1)
         self.norm1 = Norm(channels_hidden)
-        self.depthwise = CausalScaledConv1d(
+        self.depthwise = CausalConv1d(
             channels_hidden, channels_hidden, kernel_size, groups=channels_hidden,
             dilation=dilation, use_cache=use_cache, bias=bias)
         self.norm2 = Norm(channels_hidden)
@@ -310,13 +310,13 @@ class ConvBlock(nn.Module):
 
         x = self.pointwise1(x)
         x = self.norm1(x)
-        x = self.act_bal(x)
+        # x = self.act_bal(x)
         x = self.activation(x)
         if self.initial_cache is not None:
             x = torch.cat([self.initial_cache, x], dim=2)
         x = self.depthwise(x)
         x = self.norm2(x)
-        x = self.act_bal(x)
+        # x = self.act_bal(x)
         x = self.activation(x)
         x = self.pointwise2(x)
         # x = self.norm3(x)
@@ -456,7 +456,7 @@ class Encoder(EncoderInterface):
             bias = True
         else:
             raise RuntimeError(f"invalid norm {norm}")
-        self.proj = ScaledConv1d(channels, output_channels, 1, bias=bias)
+        self.proj = ScaledConv1d(channels*2, output_channels, 1, bias=bias)
         # self.norm = Norm(output_channels, affine=False)
     
     @torch.no_grad()
@@ -501,9 +501,10 @@ class Encoder(EncoderInterface):
         if not torch.jit.is_tracing():
             assert x.size(2) == lengths.max().item()
 
+        x_in = x
         for block in self.cnn:
             x, lengths = block(x, lengths)   # [batch_size, channels, time]
-        x = self.proj(x)        # [batch_size, channels_out, time]
+        x = self.proj(torch.cat((x, x_in), dim=1))  # [batch_size, channels_out, time]
         # x = self.norm(x)
         x = x.transpose(1, 2)   # [B, T, C]
         return x, lengths, None

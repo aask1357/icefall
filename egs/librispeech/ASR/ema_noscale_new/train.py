@@ -174,14 +174,14 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--act-bal",
         type=str2bool,
-        default=True,
+        default=False,
         help="Whether to use Activation Balancer or not.",
     )
 
     parser.add_argument(
         "--whitener",
         type=str2bool,
-        default=True,
+        default=False,
         help="Whether to use Whitener or not.",
     )
 
@@ -236,7 +236,7 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--scale-limit",
         type=float,
-        default=2.0,
+        default=1.0,
     )
 
     parser.add_argument(
@@ -1145,7 +1145,7 @@ def run(rank, world_size, args):
             "ema\\.weight",
             "scale",
             ".*parametrizations\\.weight\\.original0",
-            # "decoder\\.embedding",
+            "decoder\\.embedding",
             
             # Below -> ignore
             # "joiner.+parametrizations\\.weight\\.original0",

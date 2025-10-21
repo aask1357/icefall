@@ -707,6 +707,27 @@ class AsrDataModule:
         ).modify_ids(lambda id: f"freetalk-kid-{id}")
 
     @lru_cache()
+    def reazonspeech_medium_train_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-train cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_train.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-train-{id}")
+
+    @lru_cache()
+    def reazonspeech_medium_dev_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-dev cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_dev.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-dev-{id}")
+
+    @lru_cache()
+    def reazonspeech_medium_test_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-test cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_medium_cuts_test.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-test-{id}")
+
+    @lru_cache()
     def reazonspeech_large_train_cuts(self) -> CutSet:
         logging.info("About to get reazonspeech-large-train cuts")
         return load_manifest_lazy(
@@ -725,7 +746,7 @@ class AsrDataModule:
         logging.info("About to get reazonspeech-large-test cuts")
         return load_manifest_lazy(
             self.args.manifest_dir / "reazonspeech_large_cuts_test.jsonl.gz"
-        ).modify_ids(lambda id: f"reazonspeech-test-{id}")
+        ).modify_ids(lambda id: f"reazonspeech-large-test-{id}")
 
     @lru_cache()
     def jsut_basic5000_cuts(self) -> CutSet:
@@ -741,4 +762,3 @@ class AsrDataModule:
     #     return load_manifest_lazy(
     #         self.args.manifest_dir / "freetalk_old_cuts_train.jsonl.gz"
     #     )
-

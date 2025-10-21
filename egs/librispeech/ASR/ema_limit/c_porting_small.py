@@ -60,6 +60,13 @@ params.vocab_size = sp.GetPieceSize()
 model = get_transducer_model(params)
 avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}-bp-{BLANK_PENALTY:.1f}.pt")
 get_model(params, model, device, args, sp, avg_path)
+# total_params = 0
+# for n, p in model.named_parameters():
+#     if n.startswith("simple"):
+#         continue
+#     total_params += p.numel()
+#     # print(n, p.shape)
+# print(f"total params: {total_params}")
 torch.save(
     {
         'model': model.state_dict(),

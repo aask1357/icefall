@@ -1,13 +1,13 @@
-model="ema"
-exp="eng/l11_noemawd"
+model="ema_noscale_wholenew"
+exp="eng/${model}_chscale_limit2_simplewd"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
     --start-epoch 1 \
-    --exp-dir ${model}/$exp \
+    --exp-dir exp/$exp \
     --full-libri 1 \
-    --max-duration 2400 \
+    --max-duration 2350 \
     --master-port 54321 \
     --use-fp16 True \
     --encoder-norm SyncBatchNorm \
@@ -38,7 +38,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --bpe-model /home/shahn/Documents/icefall/egs/librispeech/ASR/data/lang_bpe_500/bpe.model \
     --cutset-text text \
     --num-workers 2 \
-    --simple-loss-scale 0.5
+    --simple-loss-scale 0.5 \
+    --optimizer-name AdamP \
+    --weight-decay 0.01
     # --subsampling-factor 4 \
     # --whitener False \
     # --weight-norm True \
