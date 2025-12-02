@@ -99,7 +99,7 @@ class SpeechCommandsDataset(torch.utils.data.Dataset):
         base_dir: str = "/home/shahn/Datasets/SpeechCommands", 
         mode: str = "train",
     ):
-        ''' return label \in WORDS + [SILENCE, UNKNOWN]'''
+        ''' return label in WORDS + [SILENCE, UNKNOWN]'''
         super().__init__()
         self.base_dir = Path(base_dir)
         
@@ -146,7 +146,7 @@ class SpeechCommandsCustomDataset(torch.utils.data.Dataset):
         self,
         base_dir: str = "/home/shahn/Datasets/SpeechCommands", 
     ):
-        ''' return label \in ALL_WORDS + [SILENCE, UNKNOWN] '''
+        ''' return label in ALL_WORDS + [SILENCE, UNKNOWN] '''
         super().__init__()
         self.base_dir = Path(base_dir)
         
@@ -176,12 +176,13 @@ class SpeechCommandsCustomDataset(torch.utils.data.Dataset):
         return audio, label.upper()
 
 
-def get_model(params, model, device, args, sp, path=None):
+def get_model(params, model, device, sp, path=None):
     if path is not None and Path(path).exists():
         state_dict = torch.load(path, map_location=device)
         model.to(device)
         model.load_state_dict(state_dict["model"])
         model.eval()
+        print(f"Loaded model from {path}")
         return
 
     if not params.use_averaged_model:
@@ -210,6 +211,9 @@ def get_model(params, model, device, args, sp, path=None):
             for i in range(start, params.epoch + 1):
                 if i >= 1:
                     filenames.append(f"{params.exp_dir}/epoch-{i}.pt")
+            if hasattr(params, "start_weight"):
+                for _ in range(params.start_weight):
+                    filenames.append(f"{params.exp_dir}/epoch-{start}.pt")
             print(f"averaging {filenames}")
             model.to(device)
             model.load_state_dict(average_checkpoints(filenames, device=device))
@@ -265,7 +269,7 @@ def get_model(params, model, device, args, sp, path=None):
     
     if ((params.avg >= 1 and params.use_averaged_model) or params.avg > 1) \
         and params.update_bn and params.encoder_norm == "BatchNorm":
-        update_bn(model.encoder, args, sp)
+        update_bn(model.encoder, params, sp)
 
 
 def rnnt_loss(model, specs, T_spec, blank_id, y):

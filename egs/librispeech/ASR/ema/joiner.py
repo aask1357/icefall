@@ -34,6 +34,33 @@ class Joiner(nn.Module):
         self.encoder_proj = ScaledLinear(encoder_dim, joiner_dim)
         self.decoder_proj = ScaledLinear(decoder_dim, joiner_dim)
         self.output_linear = ScaledLinear(joiner_dim, vocab_size)
+        self.weight_parametrized = True
+
+    def remove_weight_reparameterizations(self):
+        encoder_proj = nn.Linear(
+            self.encoder_proj.in_features,
+            self.encoder_proj.out_features,
+            bias=self.encoder_proj.bias is not None,
+        )
+        decoder_proj = nn.Linear(
+            self.decoder_proj.in_features,
+            self.decoder_proj.out_features,
+            bias=self.decoder_proj.bias is not None,
+        )
+        output_linear = nn.Linear(
+            self.output_linear.in_features,
+            self.output_linear.out_features,
+            bias=self.output_linear.bias is not None,
+        )
+        encoder_proj.weight.data.copy_(self.encoder_proj.get_weight())
+        encoder_proj.bias.data.copy_(self.encoder_proj.get_bias())
+        decoder_proj.weight.data.copy_(self.decoder_proj.get_weight())
+        decoder_proj.bias.data.copy_(self.decoder_proj.get_bias())
+        output_linear.weight.data.copy_(self.output_linear.get_weight())
+        output_linear.bias.data.copy_(self.output_linear.get_bias())
+        self.encoder_proj = encoder_proj
+        self.decoder_proj = decoder_proj
+        self.output_linear = output_linear
 
     def forward(
         self,

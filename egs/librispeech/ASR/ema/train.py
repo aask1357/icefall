@@ -71,7 +71,7 @@ from optim import Eden, Eve
 from plot_params import plot_params
 from custom_fbank import CustomFbankConfig as FbankConfig
 from torch import Tensor
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
@@ -956,7 +956,7 @@ def train_one_epoch(
         )
 
         try:
-            with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
                     model=model,
@@ -1276,7 +1276,7 @@ def run(rank, world_size, args):
     validate(valid_cuts)
     valid_dl = datamodule.valid_dataloaders(valid_cuts)
 
-    scaler = GradScaler(enabled=params.use_fp16)
+    scaler = GradScaler("cuda", enabled=params.use_fp16)
     if checkpoints and "grad_scaler" in checkpoints:
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
@@ -1291,6 +1291,9 @@ def run(rank, world_size, args):
             warmup=0.0 if params.start_epoch == 1 else 1.0,
             scaler=scaler,
         )
+
+    if checkpoints and "batch_idx_train" in checkpoints:
+        params.batch_idx_train = checkpoints["batch_idx_train"]
 
     for epoch in range(params.start_epoch, params.num_epochs + 1):
         scheduler.step_epoch(epoch - 1)
@@ -1361,7 +1364,7 @@ def scan_pessimistic_batches_for_oom(
             f"batch load time: {time.perf_counter() - st:.2f} sec"
         )
         try:
-            with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, _ = compute_loss(
                     params=params,
                     model=model,

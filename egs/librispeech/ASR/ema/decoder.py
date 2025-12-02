@@ -78,6 +78,29 @@ class Decoder(nn.Module):
             # It is to support torch script
             self.conv = nn.Identity()
 
+    def remove_weight_reparameterizations(self):
+        embedding = nn.Embedding(
+            num_embeddings=self.embedding.num_embeddings,
+            embedding_dim=self.embedding.embedding_dim,
+            _weight=self.embedding.get_weight(),
+        )
+        conv = nn.Conv1d(
+            in_channels=self.conv.in_channels,
+            out_channels=self.conv.out_channels,
+            kernel_size=self.conv.kernel_size,
+            stride=self.conv.stride,
+            padding=self.conv.padding,
+            dilation=self.conv.dilation,
+            groups=self.conv.groups,
+            bias=self.conv.bias is not None,
+        )
+        embedding.weight.data.copy_(self.embedding.get_weight())
+        conv.weight.data.copy_(self.conv.get_weight())
+        if self.conv.bias is not None:
+            conv.bias.data.copy_(self.conv.bias)
+        self.embedding = embedding
+        self.conv = conv
+
     def forward(
         self,
         y: torch.Tensor,

@@ -541,7 +541,7 @@ def fast_beam_search(
                 ilme_logits[:, 0] -= blank_penalty
             ilme_log_probs = (ilme_logits / temperature).log_softmax(dim=-1)
             log_probs -= ilme_scale * ilme_log_probs
-
+        # breakpoint()
         decoding_streams.advance(log_probs)
     decoding_streams.terminate_and_flush_to_streams()
     lattice = decoding_streams.format_output(

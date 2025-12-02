@@ -32,19 +32,28 @@ args.exp_dir = Path(args.exp_dir)
 
 MODEL = "ema"
 EXP = "small"
-EXP = "eng/l11_noemawd"
+EXP = "ko/kspon_noisy_ft_from_avg"
 
-args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/{MODEL}/{EXP}")
+args.exp_dir = Path(f"/home/shahn/Documents/icefall/egs/librispeech/ASR/exp/{EXP}")
 args.channels = 256
 args.channels_expansion = 1024
 args.encoder_dim = 512
 args.decoder_dim = 256
 args.joiner_dim = 256
 args.dilations_version = 11
-args.avg = 64
-args.epoch = 200
-args.use_averaged_model = True
+args.avg = 12
+args.epoch = 108
+args.start_weight = 12
+args.use_averaged_model = False
 args.update_bn = True
+args.bpe_model = "data/ko/lang_bpe_500_ipa_filtered/bpe.model"
+args.manifest_dir = Path("data/ko/fbank")
+args.cutset_text = "custom.ipa_filtered"
+args.enable_musan = False
+args.enable_spec_aug = True
+args.data_libri_train = False
+args.data_ksponspeech_enhanced_train = True
+args.start_batch = 0
 
 params = get_params()
 params.update(vars(args))
@@ -66,8 +75,8 @@ model = get_transducer_model(params)
 #         ),
 #     }, f"ema/kws_abs/epoch-120-avg-{args.avg}.pt"
 # )
-avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}.pt")
-get_model(params, model, device, args, sp, avg_path)
+avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}-sw-{args.start_weight}.pt")
+get_model(params, model, device, sp, avg_path)
 torch.save(
     {
         'model': model.state_dict(),
@@ -78,7 +87,7 @@ torch.save(
     }, avg_path
 )
 
-sr, x = wavfile.read("/home/shahn/Documents/sherpa-onnx/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/test_wavs/0.wav")
+sr, x = wavfile.read("/home/shahn/Datasets/zeroth/test_data_01_wav/104_003_0019.wav")
 x = (x / 2**15).astype(np.float32)
 
 hop = 160

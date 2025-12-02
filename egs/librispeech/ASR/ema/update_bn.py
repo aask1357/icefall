@@ -21,46 +21,7 @@ def update_bn(model: nn.Module, args, sp) -> None:
     
     # prepare train dataset
     datamodule = AsrDataModule(args)
-    train_cuts = CutSet()
-    if args.data_libri_train:
-        train_cuts += datamodule.train_clean_100_cuts()
-        if args.full_libri:
-            train_cuts += datamodule.train_clean_360_cuts()
-            train_cuts += datamodule.train_other_500_cuts()
-    if args.data_ksponspeech_train:
-        train_cuts += datamodule.ksponspeech_train_cuts()
-    if args.data_zeroth_train:
-        train_cuts += datamodule.zeroth_train_cuts()
-    if args.data_command_kid_train:
-        train_cuts += datamodule.command_kid_train_cuts()
-    if args.data_command_nor_train:
-        train_cuts += datamodule.command_nor_train_cuts()
-    if args.data_command_old_train:
-        train_cuts += datamodule.command_old_train_cuts()
-    if args.data_freetalk_kid_train:
-        train_cuts += datamodule.freetalk_kid_train_cuts()
-    if args.data_freetalk_nor_train:
-        train_cuts += datamodule.freetalk_nor_train_cuts()
-    
-    def remove_short_and_long_utt(c):
-        # Keep only utterances with duration between 1 second and 20 seconds
-        #
-        # Caution: There is a reason to select 20.0 here. Please see
-        # ../local/display_manifest_statistics.py
-        #
-        # You should use ../local/display_manifest_statistics.py to get
-        # an utterance duration distribution for your dataset to select
-        # the threshold
-        if c.duration < 0.9 or c.duration > 31.0:
-            logging.warning(
-                f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
-            )
-            return False
-
-        return True
-    train_cuts = train_cuts.filter(remove_short_and_long_utt)
-    
-    train_dl = datamodule.train_dataloaders(train_cuts)
+    train_dl = datamodule.get_train_dataloader(args, sp)
     
     # save model config
     was_training = model.training
@@ -79,7 +40,7 @@ def update_bn(model: nn.Module, args, sp) -> None:
         N, T, C = feature.shape
         time += N * T * 10 / 1000   # 10ms
         feature_lens = batch["supervisions"]["num_frames"].to(device)
-        with torch.cuda.amp.autocast(enabled=True):
+        with torch.amp.autocast("cuda", enabled=True):
             _ = model(
                 x=feature,
                 x_lens=feature_lens,

@@ -51,6 +51,7 @@ def get_model(params, model, device, args, sp, path=None):
         model.to(device)
         model.load_state_dict(state_dict["model"])
         model.eval()
+        print(f"Loaded model from {path}")
         return
 
     if not params.use_averaged_model:

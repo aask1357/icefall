@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union, List
 
 import torch
-from lhotse import CutSet, load_manifest, load_manifest_lazy
+from lhotse import CutSet, load_manifest, load_manifest_lazy, validate
 from lhotse.dataset import (  # noqa F401 for PrecomputedFeatures
     CutConcatenate,
     CutMix,
@@ -149,6 +149,18 @@ class AsrDataModule:
             help="""When enabled, use LibriSpeech-dev-other for validation.""",
         )
         group.add_argument(
+            "--data-libri-test-clean",
+            type=str2bool,
+            default=False,
+            help="""When enabled, use LibriSpeech-test-clean for test.""",
+        )
+        group.add_argument(
+            "--data-libri-test-other",
+            type=str2bool,
+            default=False,
+            help="""When enabled, use LibriSpeech-test-other for test.""",
+        )
+        group.add_argument(
             "--data-ksponspeech-train",
             type=str2bool,
             default=False,
@@ -171,6 +183,30 @@ class AsrDataModule:
             type=str2bool,
             default=False,
             help="When enabled, use kpsonspeech-eval-clean.",
+        )
+        group.add_argument(
+            "--data-ksponspeech-enhanced-train",
+            type=str2bool,
+            default=False,
+            help="When enabled, use kpsonspeech-enhanced for training.",
+        )
+        group.add_argument(
+            "--data-ksponspeech-enhanced-dev",
+            type=str2bool,
+            default=False,
+            help="When enabled, use kpsonspeech-enhanced-dev.",
+        )
+        group.add_argument(
+            "--data-ksponspeech-enhanced-eval-clean",
+            type=str2bool,
+            default=False,
+            help="When enabled, use kpsonspeech-enhanced-eval-clean.",
+        )
+        group.add_argument(
+            "--data-ksponspeech-enhanced-eval-other",
+            type=str2bool,
+            default=False,
+            help="When enabled, use kpsonspeech-enhanced-eval-other.",
         )
         group.add_argument(
             "--data-zeroth-train",
@@ -215,16 +251,58 @@ class AsrDataModule:
             help="When enabled, use Freetalk-Normal for training.",
         )
         group.add_argument(
-            "--data-reazonspeech-train",
+            "--data-reazonspeech-medium-train",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-medium for training.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-medium-dev",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-dev for validation.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-medium-test",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-test for validation.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-large-train",
             type=str2bool,
             default=False,
             help="When enabled, use ReazonSpeech for training.",
         )
         group.add_argument(
-            "--data-reazonspeech-dev",
+            "--data-reazonspeech-large-dev",
             type=str2bool,
             default=False,
-            help="When enabled, use ReazonSpeech for validation.",
+            help="When enabled, use ReazonSpeech-dev for validation.",
+        )
+        group.add_argument(
+            "--data-reazonspeech-large-test",
+            type=str2bool,
+            default=False,
+            help="When enabled, use ReazonSpeech-test for validation.",
+        )
+        group.add_argument(
+            "--data-jsut-basic5000",
+            type=str2bool,
+            default=False,
+            help="When enabled, use JSUT-basic5000 for validation.",
+        )
+        group.add_argument(
+            "--data-jsut-basic5000-sudachi",
+            type=str2bool,
+            default=False,
+            help="When enabled, use JSUT-basic5000-Sudachi for validation.",
+        )
+        group.add_argument(
+            "--data-tedxjp-10k",
+            type=str2bool,
+            default=False,
+            help="When enabled, use TEDxJP-10K-v1.1 for validation.",
         )
 
         group.add_argument(
@@ -351,6 +429,20 @@ class AsrDataModule:
             type=str,
             default="text",
             help="text|custom.ipa|custom.cjj|custom.ipa_filtered"
+        )
+
+        group.add_argument(
+            "--min-utt-duration",
+            type=float,
+            default=0.9,
+            help="Minimum utterance duration in seconds.",
+        )
+
+        group.add_argument(
+            "--max-utt-duration",
+            type=float,
+            default=31.0,
+            help="Maximum utterance duration in seconds.",
         )
 
     def train_dataloaders(
@@ -646,6 +738,34 @@ class AsrDataModule:
         ).modify_ids(lambda id: f"ksp-eval-other-{id}")
 
     @lru_cache()
+    def ksponspeech_enhanced_train_cuts(self) -> CutSet:
+        logging.info("About to get ksponspeech-enhanced-train cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "ksponspeech_enhanced_cuts_train.jsonl.gz"
+        ).modify_ids(lambda id: f"ksp-enh-train-{id}")
+
+    @lru_cache()
+    def ksponspeech_enhanced_dev_cuts(self) -> CutSet:
+        logging.info("About to get ksponspeech-enhanced-dev cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "ksponspeech_enhanced_cuts_dev.jsonl.gz"
+        ).modify_ids(lambda id: f"ksp-enh-dev-{id}")
+
+    @lru_cache()
+    def ksponspeech_enhanced_eval_clean_cuts(self) -> CutSet:
+        logging.info("About to get ksponspeech-enhanced-eval-clean cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "ksponspeech_enhanced_cuts_eval_clean.jsonl.gz"
+        ).modify_ids(lambda id: f"ksp-enh-eval-clean-{id}")
+
+    @lru_cache()
+    def ksponspeech_enhanced_eval_other_cuts(self) -> CutSet:
+        logging.info("About to get ksponspeech-enhanced-eval-other cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "ksponspeech_enhanced_cuts_eval_other.jsonl.gz"
+        ).modify_ids(lambda id: f"ksp-enh-eval-other-{id}")
+
+    @lru_cache()
     def zeroth_train_cuts(self) -> CutSet:
         logging.info("About to get zeroth-train cuts")
         return load_manifest_lazy(
@@ -695,25 +815,67 @@ class AsrDataModule:
         ).modify_ids(lambda id: f"freetalk-kid-{id}")
 
     @lru_cache()
-    def reazonspeech_train_cuts(self) -> CutSet:
-        logging.info("About to get reazonspeech-train cuts")
+    def reazonspeech_medium_train_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-train cuts")
         return load_manifest_lazy(
-            self.args.manifest_dir / "reazonspeech_cuts_train.jsonl.gz"
-        ).modify_ids(lambda id: f"reazonspeech-train-{id}")
+            self.args.manifest_dir / "reazonspeech_medium_cuts_train.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-train-{id}")
 
     @lru_cache()
-    def reazonspeech_dev_cuts(self) -> CutSet:
-        logging.info("About to get reazonspeech-dev cuts")
+    def reazonspeech_medium_dev_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-dev cuts")
         return load_manifest_lazy(
-            self.args.manifest_dir / "reazonspeech_cuts_dev.jsonl.gz"
-        ).modify_ids(lambda id: f"reazonspeech-dev-{id}")
+            self.args.manifest_dir / "reazonspeech_medium_cuts_dev.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-dev-{id}")
 
     @lru_cache()
-    def reazonspeech_test_cuts(self) -> CutSet:
-        logging.info("About to get reazonspeech-test cuts")
+    def reazonspeech_medium_test_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-medium-test cuts")
         return load_manifest_lazy(
-            self.args.manifest_dir / "reazonspeech_cuts_test.jsonl.gz"
-        ).modify_ids(lambda id: f"reazonspeech-test-{id}")
+            self.args.manifest_dir / "reazonspeech_medium_cuts_test.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-medium-test-{id}")
+
+    @lru_cache()
+    def reazonspeech_large_train_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-large-train cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_large_cuts_train.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-large-train-{id}")
+
+    @lru_cache()
+    def reazonspeech_large_dev_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-large-dev cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_large_cuts_dev.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-large-dev-{id}")
+
+    @lru_cache()
+    def reazonspeech_large_test_cuts(self) -> CutSet:
+        logging.info("About to get reazonspeech-large-test cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "reazonspeech_large_cuts_test.jsonl.gz"
+        ).modify_ids(lambda id: f"reazonspeech-large-test-{id}")
+
+    @lru_cache()
+    def jsut_basic5000_cuts(self) -> CutSet:
+        logging.info("About to get jsut-basic5000 cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "jsut_basic5000_cuts.jsonl.gz"
+        ).modify_ids(lambda id: f"jsut-basic5000-{id}")
+
+    @lru_cache()
+    def jsut_basic5000_sudachi_cuts(self) -> CutSet:
+        logging.info("About to get jsut-basic5000-sudachi cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "jsut_basic5000_sudachi_cuts.jsonl.gz"
+        ).modify_ids(lambda id: f"jsut-basic5000-sudachi-{id}")
+
+    @lru_cache()
+    def tedxjp_10k_cuts(self) -> CutSet:
+        logging.info("About to get TEDxJP-10K-v1.1 cuts")
+        return load_manifest_lazy(
+            self.args.manifest_dir / "tedxjp_10k_v1.1_cuts.jsonl.gz"
+        ).modify_ids(lambda id: f"tedxjp-10k-v1.1-{id}")
 
     # freetalk_old -> PCM data -> not implemented yet.
     # @lru_cache()
@@ -723,3 +885,140 @@ class AsrDataModule:
     #         self.args.manifest_dir / "freetalk_old_cuts_train.jsonl.gz"
     #     )
 
+    def get_train_dataloader(self, args, sp, checkpoints=None) -> DataLoader:
+        train_cuts = CutSet()
+        if args.data_libri_train:
+            train_cuts += self.train_clean_100_cuts()
+            if args.full_libri:
+                train_cuts += self.train_clean_360_cuts()
+                train_cuts += self.train_other_500_cuts()
+        if args.data_ksponspeech_train:
+            train_cuts += self.ksponspeech_train_cuts()
+        if args.data_ksponspeech_enhanced_train:
+            train_cuts += self.ksponspeech_enhanced_train_cuts()
+        if args.data_zeroth_train:
+            train_cuts += self.zeroth_train_cuts()
+        if args.data_command_kid_train:
+            train_cuts += self.command_kid_train_cuts()
+        if args.data_command_nor_train:
+            train_cuts += self.command_nor_train_cuts()
+        if args.data_command_old_train:
+            train_cuts += self.command_old_train_cuts()
+        if args.data_freetalk_kid_train:
+            train_cuts += self.freetalk_kid_train_cuts()
+        if args.data_freetalk_nor_train:
+            train_cuts += self.freetalk_nor_train_cuts()
+        if args.data_reazonspeech_medium_train:
+            train_cuts += self.reazonspeech_medium_train_cuts()
+        if args.data_reazonspeech_large_train:
+            train_cuts += self.reazonspeech_large_train_cuts()
+        def remove_short_and_long_utt(c):
+            # Keep only utterances with duration between 1 second and 20 seconds
+            #
+            # Caution: There is a reason to select 20.0 here. Please see
+            # ../local/display_manifest_statistics.py
+            #
+            # You should use ../local/display_manifest_statistics.py to get
+            # an utterance duration distribution for your dataset to select
+            # the threshold
+            if c.duration < args.min_utt_duration or c.duration > args.max_utt_duration:
+                logging.warning(
+                    f"Exclude cut with ID {c.id} from training. Duration: {c.duration}"
+                )
+                return False
+
+            # In pruned RNN-T, we require that T >= S
+            # where T is the number of feature frames after subsampling
+            # and S is the number of tokens in the utterance
+
+            # In ./lstm.py, the conv module uses the following expression
+            # for subsampling
+            if c.num_frames is not None:
+                T = ((c.num_frames - 3) // 2 - 1) // 2
+            else:
+                T = int(c.duration / FbankConfig.frame_shift)
+
+            if args.cutset_text == "text":
+                text = c.supervisions[0].text
+            elif args.cutset_text.startswith("custom."):
+                text_type = args.cutset_text[7:]
+                _filter_ipa = (text_type == "ipa_filtered")
+                if _filter_ipa:
+                    text_type = "ipa"
+                text = c.supervisions[0].custom[text_type]
+                if _filter_ipa:
+                    text = filter_ipa(text)
+            else:
+                raise ValueError(f"Unsupported cutset_text: {args.cutset_text}")
+            tokens = sp.encode(text, out_type=str)
+
+            if T < len(tokens):
+                logging.warning(
+                    f"Exclude cut with ID {c.id} from training. "
+                    f"Number of frames (before subsampling): {c.num_frames}. "
+                    f"Number of frames (after subsampling): {T}. "
+                    f"Text: {text}. "
+                    f"Tokens: {tokens}. "
+                    f"Number of tokens: {len(tokens)}"
+                )
+                return False
+            return True
+        train_cuts = train_cuts.filter(remove_short_and_long_utt)
+
+        if getattr(args, "start_batch", 0) > 0 and checkpoints and "sampler" in checkpoints:
+            # We only load the sampler's state dict when it loads a checkpoint
+            # saved in the middle of an epoch
+            sampler_state_dict = checkpoints["sampler"]
+        else:
+            sampler_state_dict = None
+        return self.train_dataloaders(train_cuts, sampler_state_dict=sampler_state_dict)
+
+    def get_valid_dataloader_dict(self, args) -> Dict[str, DataLoader]:
+        valid_cuts = dict()
+        if args.data_libri_dev_clean:
+            valid_cuts["librispeech-dev-clean"] = self.dev_clean_cuts()
+        if args.data_libri_dev_other:
+            valid_cuts["librispeech-dev-other"] = self.dev_other_cuts()
+        if args.data_ksponspeech_dev:
+            valid_cuts["ksponspeech-dev"] = self.ksponspeech_dev_cuts()
+        if args.data_ksponspeech_enhanced_dev:
+            valid_cuts["ksponspeech-enhanced-dev"] = self.ksponspeech_enhanced_dev_cuts()
+        if args.data_reazonspeech_medium_dev:
+            valid_cuts["reazonspeech-medium-dev"] = self.reazonspeech_medium_dev_cuts()
+        if args.data_reazonspeech_large_dev:
+            valid_cuts["reazonspeech-large-dev"] = self.reazonspeech_large_dev_cuts()
+        if args.data_jsut_basic5000:
+            valid_cuts["jsut-basic5000"] = self.jsut_basic5000_cuts()
+        if args.data_jsut_basic5000_sudachi:
+            valid_cuts["jsut-basic5000-sudachi"] = self.jsut_basic5000_sudachi_cuts()
+        if args.data_tedxjp_10k:
+            valid_cuts["tedxjp-10k-v1.1"] = self.tedxjp_10k_cuts()
+        for cuts in valid_cuts.values():
+            validate(cuts)
+        return dict(
+            (name, self.valid_dataloaders(cuts)) for name, cuts in valid_cuts.items()
+        )
+
+    def get_test_dataloader_dict(self, args) -> Dict[str, DataLoader]:
+        test_cuts = dict()
+        if args.data_libri_test_clean:
+            test_cuts["librispeech-test-clean"] = self.test_clean_cuts()
+        if args.data_libri_test_other:
+            test_cuts["librispeech-test-other"] = self.test_other_cuts()
+        if args.data_ksponspeech_eval_clean:
+            test_cuts["ksponspeech-eval-clean"] = self.ksponspeech_eval_clean_cuts()
+        if args.data_ksponspeech_eval_other:
+            test_cuts["ksponspeech-eval-other"] = self.ksponspeech_eval_other_cuts()
+        if args.data_ksponspeech_enhanced_eval_clean:
+            test_cuts[
+                "ksponspeech-enhanced-eval-clean"
+            ] = self.ksponspeech_enhanced_eval_clean_cuts()
+        if args.data_ksponspeech_enhanced_eval_other:
+            test_cuts[
+                "ksponspeech-enhanced-eval-other"
+            ] = self.ksponspeech_enhanced_eval_other_cuts()
+        if args.data_zeroth_test:
+            test_cuts["zeroth-test"] = self.zeroth_test_cuts()
+        return dict(
+            (name, self.test_dataloaders(cuts)) for name, cuts in test_cuts.items()
+        )

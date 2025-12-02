@@ -1,11 +1,11 @@
 model="ema"
-exp=korean/vocab500_ipa_do_sl0.5_l11_customfbank
+exp=exp/ko/ipa_do_sl0.5
 avg=32
-CUDA_VISIBLE_DEVICES=1 ${model}/decode_korean_cer.py \
+CUDA_VISIBLE_DEVICES=4 ${model}/decode_korean_cer.py \
     --epoch 97 \
     --iter 0 \
     --avg $avg \
-    --exp-dir ${model}/${exp} \
+    --exp-dir ${exp} \
     --max-duration 600 \
     --decoding-method fast_beam_search \
     --use-averaged-model True \
@@ -30,5 +30,6 @@ CUDA_VISIBLE_DEVICES=1 ${model}/decode_korean_cer.py \
     --data-ksponspeech-eval-other True \
     --data-zeroth-test True \
     --on-the-fly-feats True \
-    --bpe-model /home/shahn/Documents/icefall_github/egs/ksponspeech/ASR/data/lang_bpe_500_ipa_filtered/bpe.model \
+    --bpe-model data/ko/lang_bpe_500_ipa_filtered/bpe.model \
+    --manifest-dir data/ko/fbank \
     --cutset-text custom.ipa_filtered

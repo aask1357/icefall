@@ -14,6 +14,7 @@ from scaling import (
     ScaledConv1d,
 )
 from chip_fp16 import Q, q
+from fp8 import q_fp8
 
 
 class CausalConv1d(nn.Conv1d):
@@ -147,6 +148,11 @@ class CausalSE(nn.Module):
         self.sequential[2].weight.data.copy_(seq[idx].get_weight())
         self.sequential[2].bias.data.copy_(seq[idx].get_bias())
 
+    def q_fp8(self, prefix: str) -> None:
+        # Assume that remove_weight_reparameterizations() has been called.
+        q_fp8(self.sequential[0].weight.data, f"{prefix}.sequential.0")
+        q_fp8(self.sequential[2].weight.data, f"{prefix}.sequential.2")
+
     def forward(self, x: Tensor) -> tp.Tuple[Tensor, Tensor]:
         """
         Args:
@@ -250,7 +256,7 @@ class ConvBlock(nn.Module):
             self.scale = nn.Parameter(torch.zeros(1))
         self.initial_cache = None
 
-    def remove_weight_reparameterizations(self):
+    def remove_weight_reparameterizations(self, fuse_bn: bool = True) -> None:
         kwargs = dict(device=self.pointwise1.weight.device, dtype=self.pointwise1.weight.dtype)
         bias = False if self.pointwise1.bias is None else True
         if self.scaled_conv:
@@ -261,7 +267,15 @@ class ConvBlock(nn.Module):
             if bias:
                 self.pointwise1.bias.data.copy_(conv.get_bias())
             conv = self.depthwise
-            self.depthwise = CausalConv1d(
+            delattr(self, "initial_cache")
+            self.register_buffer(
+                "initial_cache",
+                torch.zeros(
+                    1, conv.out_channels, conv.kernel_size[0]-1,
+                    dtype=conv.weight.dtype, device=conv.weight.device
+                )   # [B=1, C, K-1]
+            )
+            self.depthwise = nn.Conv1d(
                 conv.in_channels, conv.out_channels, conv.kernel_size,
                 groups=conv.groups, bias=bias, **kwargs)
             self.depthwise.weight.data.copy_(conv.get_weight())
@@ -273,7 +287,7 @@ class ConvBlock(nn.Module):
             self.pointwise2.bias.data.copy_(conv.get_bias())
             self.se.remove_weight_reparameterizations()
         
-        if self.norm in ["BatchNorm", "SyncBatchNorm"]:
+        if fuse_bn and self.norm in ["BatchNorm", "SyncBatchNorm"]:
             # y = ((x - mean) / std * gamma + beta) * weight
             # <=> y = x * (gamma/std*weight) + (-mean*gamma/std*weight + beta*weight)
             # mean, std, gamma, beta: [Ci], weight: [Co, Ci, K]
@@ -283,10 +297,14 @@ class ConvBlock(nn.Module):
             conv_bias = self.depthwise.bias
             weight = (self.norm1.weight/std)
             bias = -(mean*self.norm1.weight/std) + self.norm1.bias
-            self.initial_cache = torch.stack(
-                [-bias.view(1, -1) for _ in range(self.depthwise.kernel_size[0]-1)],
-                dim=2
-            )   # [B=1, C, K-1]
+            delattr(self, "initial_cache")
+            self.register_buffer(
+                "initial_cache",
+                torch.stack(
+                    [-bias.view(1, -1) for _ in range(self.depthwise.kernel_size[0]-1)],
+                    dim=2
+                )   # [B=1, C, K-1]
+            )
             tmp = torch.cat([bias.view(1, -1, 1), -self.initial_cache], dim=2)  # [B=1, C, K]
             bias = F.conv1d(tmp, conv_weight, groups=self.depthwise.groups)
             
@@ -325,6 +343,13 @@ class ConvBlock(nn.Module):
             self.pointwise2.bias.data.copy_(bias.squeeze(2).squeeze(0) + conv_bias)
             self.norm2 = nn.Identity()
 
+    def q_fp8(self, prefix: str) -> None:
+        # Assume that remove_weight_reparameterizations() has been called.
+        q_fp8(self.pointwise1.weight, f"{prefix}.pointwise1")
+        q_fp8(self.depthwise.weight, f"{prefix}.depthwise")
+        q_fp8(self.pointwise2.weight, f"{prefix}.pointwise2")
+        self.se.q_fp8(f"{prefix}.se")
+
     def forward(
         self,
         inputs: Tensor,
@@ -352,7 +377,8 @@ class ConvBlock(nn.Module):
         x = self.activation(x)
         x = self.norm1(x)
         if self.initial_cache is not None:
-            x = torch.cat([self.initial_cache, x], dim=2)
+            cache = self.initial_cache.repeat(x.size(0), 1, 1)
+            x = torch.cat([cache, x], dim=2)
         x = self.depthwise(x)
         x = self.act_bal(x)
         x = self.activation(x)
@@ -557,9 +583,9 @@ class Encoder(EncoderInterface):
             )
             self.cnn.append(layer)
         self.proj = Conv(channels * 2, output_channels, 1, bias=False)
-    
+
     @torch.no_grad()
-    def remove_weight_reparameterizations(self):
+    def remove_weight_reparameterizations(self, fuse_bn: bool = True):
         if self.scaled_conv:
             proj: ScaledConv1d = self.proj   # type: ignore
             kwargs = dict(device=proj.weight.device, dtype=proj.weight.dtype)
@@ -567,7 +593,14 @@ class Encoder(EncoderInterface):
             self.proj.weight.data.copy_(proj.get_weight())
             self.conv_pre.remove_weight_reparameterizations()
         for layer in self.cnn:
-            layer.remove_weight_reparameterizations()
+            layer.remove_weight_reparameterizations(fuse_bn)
+
+    @torch.no_grad()
+    def quantize_fp8(self):
+        # Assume that remove_weight_reparameterizations() has been called.
+        for idx, layer in enumerate(self.cnn):
+            layer.q_fp8(f"cnn.{idx}")
+        q_fp8(self.proj.weight.data, "proj")
 
     def forward(
         self,

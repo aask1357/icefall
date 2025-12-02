@@ -1,0 +1,59 @@
+model="ema_limit"
+exp="ko/l11_wlimit1_chunk8_ipa3"
+
+CUDA_VISIBLE_DEVICES=0,1 ${model}/train.py \
+    --world-size 2 \
+    --num-epochs 200 \
+    --start-epoch 1 \
+    --exp-dir exp/$exp \
+    --full-libri 1 \
+    --max-duration 4000 \
+    --master-port 54320 \
+    --use-fp16 True \
+    --encoder-norm SyncBatchNorm \
+    --channels 256 \
+    --channels-expansion 1024 \
+    --dilations-version 11 \
+    --kernel-size 8 \
+    --encoder-activation ReLU \
+    --encoder-se-activation ReLU \
+    --zero-init-residual True \
+    --se-gate tanh \
+    --ema-gamma 0.93 \
+    --chunksize 8 \
+    --encoder-dim 512 \
+    --decoder-dim 256 \
+    --joiner-dim 256 \
+    --encoder-dropout 0.075 \
+    --data-libri-train False \
+    --data-libri-dev-clean False \
+    --data-libri-dev-other False \
+    --data-ksponspeech-train True \
+    --data-ksponspeech-dev True \
+    --data-zeroth-train False \
+    --data-zeroth-test True \
+    --data-command-nor-train False \
+    --data-freetalk-nor-train True \
+    --on-the-fly-feats True \
+    --bpe-model data/ko/lang_bpe_500_ipa_max3/bpe.model \
+    --cutset-text custom.ipa_filtered \
+    --manifest-dir data/ko/fbank \
+    --num-workers 12 \
+    --simple-loss-scale 0.5 \
+    --min-utt-duration 0.9 \
+    --max-utt-duration 31.0
+    # --subsampling-factor 4
+    # --optimizer AdamP \
+    # --weight-decay 0.01 \
+    # --weight-decay-projection 0.00001 \
+    # --whitener False \
+    # --weight-norm True \
+    # --dec-residual False \
+    # --subsampling-factor 4 \
+    # --encoder-mean -6.883708542616444 \
+    # --encoder-std 4.677519844325524 \
+    # --iir-r-max 0.95 \
+    # --iir-lr-ratio 1.0 \
+    # --iir-bidirectional False \
+    # --iir-filtfilt True \
+    # --iir-unpad-delay False

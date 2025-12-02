@@ -1,7 +1,7 @@
 import torch
 
 
-FP16 = False
+FP16 = True
 
 
 def q(x: torch.Tensor) -> torch.Tensor:

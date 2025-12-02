@@ -187,6 +187,12 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--start-weight",
+        type=int,
+        default=1,
+    )
+
+    parser.add_argument(
         "--use-averaged-model",
         type=str2bool,
         default=True,
@@ -327,6 +333,35 @@ def get_parser():
         fast_beam_search_nbest_LG, and fast_beam_search_nbest_oracle""",
     )
 
+    parser.add_argument(
+        "--start-batch",
+        type=int,
+        default=0,
+    )
+    
+    parser.add_argument(
+        "--prune-range",
+        type=int,
+        default=5,
+        help="The prune range for rnnt loss, it means how many symbols(context)"
+        "we are using to compute the loss",
+    )
+
+    parser.add_argument(
+        "--lm-scale",
+        type=float,
+        default=0.25,
+        help="The scale to smooth the loss with lm "
+        "(output of prediction network) part.",
+    )
+
+    parser.add_argument(
+        "--am-scale",
+        type=float,
+        default=0.0,
+        help="The scale to smooth the loss with am (output of encoder network) part.",
+    )
+
     add_model_arguments(parser)
 
     return parser
@@ -339,6 +374,7 @@ def decode_one_batch(
     batch: dict,
     word_table: Optional[k2.SymbolTable] = None,
     decoding_graph: Optional[k2.Fsa] = None,
+    dtype: torch.dtype = torch.float32,
 ) -> Dict[str, Tuple[List[List[str]], List[List[float]]]]:
     """Decode one batch and return the result in a dict. The dict has the
     following format:
@@ -377,7 +413,7 @@ def decode_one_batch(
     feature = batch["inputs"]
     assert feature.ndim == 3
 
-    feature = feature.to(device)
+    feature = feature.to(device=device, dtype=dtype)
     # at entry, feature is (N, T, C)
 
     supervisions = batch["supervisions"]
@@ -551,6 +587,7 @@ def decode_dataset(
     sp: spm.SentencePieceProcessor,
     word_table: Optional[k2.SymbolTable] = None,
     decoding_graph: Optional[k2.Fsa] = None,
+    dtype: torch.dtype = torch.float32,
 ) -> Dict[str, List[Tuple[str, List[str], List[str], List[float], List[float]]]]:
     """Decode dataset.
 
@@ -615,6 +652,7 @@ def decode_dataset(
             decoding_graph=decoding_graph,
             word_table=word_table,
             batch=batch,
+            dtype=dtype,
         )
 
         for name, (hyps, timestamps_hyp) in hyps_dict.items():
@@ -746,94 +784,19 @@ def main():
     model = get_transducer_model(params)
     
     from keyword_spotting import get_model
-    avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}.pt")
-    get_model(params, model, device, args, sp, avg_path)
+    avg_path = str(args.exp_dir / f"epoch-{args.epoch}-avg-{args.avg}-sw-{args.start_weight}.pt")
+    get_model(params, model, device, sp, avg_path)
+    torch.save(
+        {
+            'model': model.state_dict(),
+            'description': (
+                f"epoch={args.epoch}, avg={args.avg}, use-averaged-model=False, "
+            ),
+        }, avg_path
+    )
 
-    # if not params.use_averaged_model:
-    #     if params.iter > 0:
-    #         filenames = find_checkpoints(params.exp_dir, iteration=-params.iter)[
-    #             : params.avg
-    #         ]
-    #         if len(filenames) == 0:
-    #             raise ValueError(
-    #                 f"No checkpoints found for"
-    #                 f" --iter {params.iter}, --avg {params.avg}"
-    #             )
-    #         elif len(filenames) < params.avg:
-    #             raise ValueError(
-    #                 f"Not enough checkpoints ({len(filenames)}) found for"
-    #                 f" --iter {params.iter}, --avg {params.avg}"
-    #             )
-    #         logging.info(f"averaging {filenames}")
-    #         model.to(device)
-    #         model.load_state_dict(average_checkpoints(filenames, device=device))
-    #     elif params.avg == 1:
-    #         load_checkpoint(f"{params.exp_dir}/epoch-{params.epoch}.pt", model)
-    #     else:
-    #         start = params.epoch - params.avg + 1
-    #         filenames = []
-    #         for i in range(start, params.epoch + 1):
-    #             if i >= 1:
-    #                 filenames.append(f"{params.exp_dir}/epoch-{i}.pt")
-    #         logging.info(f"averaging {filenames}")
-    #         model.to(device)
-    #         model.load_state_dict(average_checkpoints(filenames, device=device))
-    # else:
-    #     if params.iter > 0:
-    #         filenames = find_checkpoints(params.exp_dir, iteration=-params.iter)[
-    #             : params.avg + 1
-    #         ]
-    #         if len(filenames) == 0:
-    #             raise ValueError(
-    #                 f"No checkpoints found for"
-    #                 f" --iter {params.iter}, --avg {params.avg}"
-    #             )
-    #         elif len(filenames) < params.avg + 1:
-    #             raise ValueError(
-    #                 f"Not enough checkpoints ({len(filenames)}) found for"
-    #                 f" --iter {params.iter}, --avg {params.avg}"
-    #             )
-    #         filename_start = filenames[-1]
-    #         filename_end = filenames[0]
-    #         logging.info(
-    #             "Calculating the averaged model over iteration checkpoints"
-    #             f" from {filename_start} (excluded) to {filename_end}"
-    #         )
-    #         model.to(device)
-    #         model.load_state_dict(
-    #             average_checkpoints_with_averaged_model(
-    #                 filename_start=filename_start,
-    #                 filename_end=filename_end,
-    #                 device=device,
-    #             )
-    #         )
-    #     else:
-    #         assert params.avg > 0, params.avg
-    #         start = params.epoch - params.avg
-    #         assert start >= 1, start
-    #         filename_start = f"{params.exp_dir}/epoch-{start}.pt"
-    #         filename_end = f"{params.exp_dir}/epoch-{params.epoch}.pt"
-    #         logging.info(
-    #             f"Calculating the averaged model over epoch range from "
-    #             f"{start} (excluded) to {params.epoch}"
-    #         )
-    #         model.to(device)
-    #         model.load_state_dict(
-    #             average_checkpoints_with_averaged_model(
-    #                 filename_start=filename_start,
-    #                 filename_end=filename_end,
-    #                 device=device,
-    #             )
-    #         )
-
-    # model.to(device)
-    # model.eval()
-    # if ((params.avg >= 1 and params.use_averaged_model) or params.avg > 1) \
-    #     and params.update_bn and params.encoder_norm == "BatchNorm":
-    #     update_bn(model.encoder, args, sp)
-    #     model.eval()
-    # for p in model.parameters():
-    #     q(p)
+    model.encoder.remove_weight_reparameterizations()
+    # model.encoder.quantize("int8")
 
     if "fast_beam_search" in params.decoding_method:
         if params.decoding_method == "fast_beam_search_nbest_LG":
@@ -859,18 +822,9 @@ def main():
     args.return_cuts = True
     datamodule = AsrDataModule(args)
 
-    zeroth_cuts = datamodule.zeroth_test_cuts()
-    ksponspeech_eval_clean_cuts = datamodule.ksponspeech_eval_clean_cuts()
-    ksponspeech_eval_other_cuts = datamodule.ksponspeech_eval_other_cuts()
+    test_dl_dict = datamodule.get_test_dataloader_dict(params)
 
-    zeroth_dl = datamodule.test_dataloaders(zeroth_cuts)
-    ksponspeech_clean_dl = datamodule.test_dataloaders(ksponspeech_eval_clean_cuts)
-    ksponspeech_other_dl = datamodule.test_dataloaders(ksponspeech_eval_other_cuts)
-
-    test_sets = ["zeroth", "ksponspeech-eval-clean", "ksponspeech-eval-other"]
-    test_dl = [zeroth_dl, ksponspeech_clean_dl, ksponspeech_other_dl]
-
-    for test_set, test_dl in zip(test_sets, test_dl):
+    for test_set, test_dl in test_dl_dict.items():
         results_dict = decode_dataset(
             dl=test_dl,
             params=params,

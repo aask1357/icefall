@@ -376,25 +376,35 @@ class ConvBlock(nn.Module):
 
 
 class Conv1dSubsampling(nn.Module):
-    def __init__(self, in_ch, out_ch, subsampling_factor, act_bal, scaled_conv):
+    def __init__(self, in_ch, out_ch, subsampling_factor, scaled_conv, norm):
         super().__init__()
         self.scaled_conv = scaled_conv
         if scaled_conv:
             Conv = ScaledConv1d
         else:
             Conv = nn.Conv1d
-        
-        if act_bal:
-            ActBal = ActivationBalancer
+
+        bias = True
+        if norm == "BatchNorm":
+            Norm = ScaledBatchNorm1d
+            bias = False
+        elif norm == "SyncBatchNorm":
+            Norm = ScaledSyncBatchNorm
+            bias = False
+        elif norm == "BasicNorm":
+            Norm = BasicNorm
+        elif norm == "":
+            Norm = nn.Identity
         else:
-            ActBal = nn.Identity
+            raise RuntimeError(f"invalid norm {norm}")
+
         self.subsampling_factor = subsampling_factor
         sf = subsampling_factor
 
         self.conv = nn.Sequential(
             Conv(in_ch, out_ch, 1, bias=False),
-            Conv(out_ch, out_ch, 2*sf, stride=sf, padding=0, groups=out_ch),
-            ActBal(1)
+            Conv(out_ch, out_ch, 2*sf, stride=sf, padding=0, groups=out_ch, bias=bias),
+            Norm(out_ch, affine=False),
         )
     
     def remove_weight_reparameterizations(self):
@@ -446,6 +456,7 @@ class Encoder(EncoderInterface):
         chip_fp16: bool = False,
         chunksize: int = 16,
         scale_limit: float = 2.0,
+        conv_pre_norm: bool = False,
     ) -> None:
         super().__init__()
 
@@ -462,8 +473,8 @@ class Encoder(EncoderInterface):
             num_features,
             channels,
             subsampling_factor=subsampling_factor,
-            scaled_conv=scaled_conv,
-            act_bal=act_bal
+            scaled_conv=scaled_conv if not conv_pre_norm else False,
+            norm=norm if conv_pre_norm else "",
         )
 
         self.is_pnnx = is_pnnx

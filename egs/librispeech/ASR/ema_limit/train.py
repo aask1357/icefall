@@ -71,7 +71,7 @@ from optim import Eden, Eve
 from plot_params import plot_params
 from custom_fbank import CustomFbankConfig as FbankConfig
 from torch import Tensor
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 
@@ -259,6 +259,12 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         default=4,
     )
 
+    parser.add_argument(
+        "--conv-pre-norm",
+        type=str2bool,
+        default=False,
+    )
+
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -346,6 +352,11 @@ def get_parser():
         type=float,
         default=1e-5,
         help="Not Used. Ignore it.",
+    )
+
+    parser.add_argument(
+        "--weight-limit",
+        type=float,
     )
 
     parser.add_argument(
@@ -587,6 +598,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         std=params.encoder_std,
         chunksize=params.chunksize,
         scale_limit=params.scale_limit,
+        conv_pre_norm=params.conv_pre_norm,
     )
     return encoder
 
@@ -949,7 +961,7 @@ def train_one_epoch(
         )
 
         try:
-            with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
                     model=model,
@@ -1133,8 +1145,9 @@ def run(rank, world_size, args):
         model = DDP(model, device_ids=[rank])
 
     ema = {
-        "regex_list": ["ema\\.weight", "scale"],
+        "regex_list": ["ema\\.weight", "encoder\\.cnn\\.\\d+\\.scale"],
         "weight_decay": 0.0,
+        "limit": None,
     }
     model_params = update_param_groups(model, [ema])
     # model_params = model.parameters()
@@ -1145,7 +1158,7 @@ def run(rank, world_size, args):
             weight_decay=params.weight_decay,
         )
     elif params.optimizer_name == "Eve":
-        optimizer = Eve(model_params, lr=params.initial_lr)
+        optimizer = Eve(model_params, lr=params.initial_lr, limit=params.weight_limit)
     else:
         raise ValueError(f"Unsupported optimizer: {params.optimizer_name}")
 
@@ -1286,7 +1299,7 @@ def run(rank, world_size, args):
         name: datamodule.valid_dataloaders(cuts) for name, cuts in valid_cuts_dict.items()
     }
 
-    scaler = GradScaler(enabled=params.use_fp16)
+    scaler = GradScaler("cuda", enabled=params.use_fp16)
     if checkpoints and "grad_scaler" in checkpoints:
         logging.info("Loading grad scaler state dict")
         scaler.load_state_dict(checkpoints["grad_scaler"])
@@ -1371,7 +1384,7 @@ def scan_pessimistic_batches_for_oom(
             f"batch load time: {time.perf_counter() - st:.2f} sec"
         )
         try:
-            with torch.cuda.amp.autocast(enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, _ = compute_loss(
                     params=params,
                     model=model,
