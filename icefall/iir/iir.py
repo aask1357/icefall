@@ -326,6 +326,7 @@ class EMA(nn.Module):
         init_value: float = 0.9,
         reversed: bool = False,
         use_cache: bool = False,
+        normalize: bool = False,
         device = None,
         dtype = torch.float32,
     ):
@@ -336,6 +337,7 @@ class EMA(nn.Module):
         self.channels = channels
         self.reversed = reversed
         self.r_max = r_max
+        self.normalize = normalize
         
         if init_method == "constant":
             weight_value = inv_sigmoid(init_value / r_max)   # value = r_max * sigmoid(weight)
@@ -371,8 +373,11 @@ class EMA(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         # x: [B, C, T]
         gamma = self.get_weight()
-        
-        x = x * (1.0 - gamma.view(1, self.channels, 1))     # [B, C, T]
+
+        if self.normalize:
+            x = x.float()
+        else:
+            x = x * (1.0 - gamma.view(1, self.channels, 1))     # [B, C, T]
         if self.reversed:
             x = x.flip(2)
         
@@ -381,7 +386,14 @@ class EMA(nn.Module):
             B = min(self.cache.size(0), x.size(0))
             if B > 0:
                 out[:B, :, :1] = self.cache[:B, :, :1]
-        x = iir(x, gamma, out)       # [B, C, T]
+        with torch.amp.autocast("cuda", enabled=not self.normalize):
+            x = iir(x, gamma, out)       # [B, C, T]
+            if self.normalize:
+                T = x.size(2)
+                scale = torch.arange(T, dtype=torch.float32, device=x.device).view(1, -1)    # [0, 1, ..., T-1]
+                scale = gamma.view(-1 ,1) ** scale  # [1, g, g^2, ..., g^{T-1}]
+                scale = scale.cumsum(dim=1)  # [1, 1+g, 1+g+g^2, ..., 1+g+...+g^{T-1}]
+                x = x / scale
         if self.use_cache:
             self.cache = x.detach()[:, :, -1:]
         if self.reversed:

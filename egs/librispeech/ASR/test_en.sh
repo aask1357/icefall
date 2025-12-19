@@ -1,8 +1,8 @@
-model="ema_norm"
-exp="en/norm_chunk8_g.97_dur2400"
+model="ema"
+exp="en/ema_l11"
 avg=64
-CUDA_VISIBLE_DEVICES=0 ${model}/decode.py \
-    --epoch 190 \
+CUDA_VISIBLE_DEVICES=2 ${model}/decode.py \
+    --epoch 200 \
     --iter 0 \
     --avg $avg \
     --exp-dir exp/$exp \
@@ -17,6 +17,7 @@ CUDA_VISIBLE_DEVICES=0 ${model}/decode.py \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
+    --zero-init-residual True \
     --se-gate tanh \
     --ema-gamma 0.93 \
     --chunksize 16 \
@@ -24,7 +25,6 @@ CUDA_VISIBLE_DEVICES=0 ${model}/decode.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --zero-init-residual True \
     --act-bal True \
     --whitener True \
     --bpe-model data/en/lang_bpe_500/bpe.model \

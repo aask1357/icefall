@@ -48,7 +48,7 @@ __global__ void iir_first_order_kernel(
     __syncthreads();
 
     scalar_t x[CHUNKSIZE];
-    acc_t y = (b < BATCH_SIZE) ? output[b][c][0] : acc_t(0);
+    acc_t y = (b < BATCH_SIZE) ? (acc_t)(output[b][c][0]) : acc_t(0);
     const int sm_start = threadIdx.x*(CHUNKSIZE+PADDING);
     for (int t = 0; t < TIME; t += CHUNKSIZE) {
         // load input (prefetch)
@@ -130,7 +130,7 @@ void iir_forward_cuda(
     at::Tensor denom,   // C x N where N = 1 or 2
     at::Tensor output   // B x C x (N+T)
 ) {
-  AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "iir_cuda", ([&] {
+  AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16, input.scalar_type(), "iir_cuda", ([&] {
     if (at::cuda::detail::canUse32BitIndexMath(output) && \
         at::cuda::detail::canUse32BitIndexMath(denom)) {
       iir_forward_template<scalar_t, int32_t>(input, denom, output);

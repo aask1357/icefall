@@ -13,11 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scaling import ScaledConv1d, ScaledEmbedding
+from quantized_layers import QuantizedEmbedding, QuantizedConv1d
 
 from icefall.utils import is_jit_tracing
 
@@ -41,6 +42,8 @@ class Decoder(nn.Module):
         decoder_dim: int,
         blank_id: int,
         context_size: int,
+        n_bits_act: Optional[int] = None,
+        n_bits_weight: Optional[int] = None,
     ):
         """
         Args:
@@ -59,6 +62,10 @@ class Decoder(nn.Module):
         self.embedding = ScaledEmbedding(
             num_embeddings=vocab_size,
             embedding_dim=decoder_dim,
+        ) if n_bits_weight is None else QuantizedEmbedding(
+            num_embeddings=vocab_size,
+            embedding_dim=decoder_dim,
+            n_bits_weight=n_bits_weight,
         )
         self.blank_id = blank_id
 
@@ -66,17 +73,52 @@ class Decoder(nn.Module):
         self.context_size = context_size
         self.vocab_size = vocab_size
         if context_size > 1:
-            self.conv = ScaledConv1d(
-                in_channels=decoder_dim,
-                out_channels=decoder_dim,
-                kernel_size=context_size,
-                padding=0,
-                groups=decoder_dim,
-                bias=False,
-            )
+            if n_bits_weight is None:
+                self.conv = ScaledConv1d(
+                    in_channels=decoder_dim,
+                    out_channels=decoder_dim,
+                    kernel_size=context_size,
+                    padding=0,
+                    groups=decoder_dim,
+                    bias=False,
+                )
+            else:
+                self.conv = QuantizedConv1d(
+                    in_channels=decoder_dim,
+                    out_channels=decoder_dim,
+                    kernel_size=context_size,
+                    padding=0,
+                    groups=decoder_dim,
+                    bias=False,
+                    n_bits_act=n_bits_act,
+                    n_bits_weight=n_bits_weight,
+                )
         else:
             # It is to support torch script
             self.conv = nn.Identity()
+
+    def remove_weight_reparameterizations(self):
+        embedding = nn.Embedding(
+            num_embeddings=self.embedding.num_embeddings,
+            embedding_dim=self.embedding.embedding_dim,
+            _weight=self.embedding.get_weight(),
+        )
+        conv = nn.Conv1d(
+            in_channels=self.conv.in_channels,
+            out_channels=self.conv.out_channels,
+            kernel_size=self.conv.kernel_size,
+            stride=self.conv.stride,
+            padding=self.conv.padding,
+            dilation=self.conv.dilation,
+            groups=self.conv.groups,
+            bias=self.conv.bias is not None,
+        )
+        embedding.weight.data.copy_(self.embedding.get_weight())
+        conv.weight.data.copy_(self.conv.get_weight())
+        if self.conv.bias is not None:
+            conv.bias.data.copy_(self.conv.bias)
+        self.embedding = embedding
+        self.conv = conv
 
     def forward(
         self,

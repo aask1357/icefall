@@ -1,23 +1,22 @@
-model="ema_q"
-exp="en/q_wlimit.3_bp0init_csg.95"
+model="ema_limit_q"
+exp="en/w4_lr5e-3_linlr1e-4"
 
 CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
-    --start-epoch 1 \
+    --start-epoch 198 \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
     --master-port 54324 \
-    --use-fp16 True \
-    --encoder-norm SyncBatchNorm \
+    --use-fp16 False \
     --channels 256 \
     --channels-expansion 1024 \
     --dilations-version 11 \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
-    --skip bypass-zeroinit \
+    --skip residual-zeroinit \
     --se-gate tanh \
     --ema-gamma 0.97 \
     --chunksize 8 \
@@ -25,11 +24,10 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
+    --quantizer-gamma 0.95 \
+    --eps 1.0e-5 \
+    --n-bits-weight 4 \
     --weight-limit 0.3 \
-    --conv-scale-gamma 0.95 \
-    --clamp-method None \
-    --conv-pre-norm True \
-    --conv-post-norm False \
     --data-libri-train True \
     --data-libri-dev-clean True \
     --data-libri-dev-other True \
@@ -46,7 +44,11 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --num-workers 2 \
     --simple-loss-scale 0.5 \
     --optimizer-name Eve \
+    --scheduler-name LinearWarmupLR \
+    --initial-lr 5e-3 \
+    --lr-warmup-iterations 0 \
+    --lr-gamma 0.98 \
+    --lr-eta-min 1.0e-4 \
     --weight-decay 0.001 \
     --min-utt-duration 1.0 \
     --max-utt-duration 20.0
-    # --weight-limit 0.3 \

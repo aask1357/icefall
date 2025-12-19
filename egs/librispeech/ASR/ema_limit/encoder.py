@@ -1,5 +1,4 @@
 import typing as tp
-import random
 
 import torch
 from torch.nn import functional as F
@@ -15,6 +14,7 @@ from scaling import (
     ScaledSyncBatchNorm,
     ScaledBatchNorm1d,
 )
+from quantized_layers import QuantizedConv1d
 from chip_fp16 import Q, q
 
 
@@ -26,7 +26,7 @@ class CausalConv1d(nn.Conv1d):
         self.cache = torch.empty(0)
         self.use_cache = use_cache
         Q(self)
-    
+
     def empty_cache(self):
         self.cache = torch.empty(0)
 
@@ -97,6 +97,8 @@ class CausalSE(nn.Module):
         se_gate: str = "sigmoid",
         gamma: float = 0.9,
         use_cache: bool = False,
+        n_bits_act: tp.Optional[int] = None,
+        n_bits_weight: tp.Optional[int] = None,
     ) -> None:
         super().__init__()
         assert dim % 8 == 0, 'Dimension should be divisible by 8.'
@@ -106,15 +108,27 @@ class CausalSE(nn.Module):
         self.activation = activation
 
         self.ema = EMA(dim, r_max=gamma, init_method="uniform", use_cache=use_cache)
-        Conv = ScaledConv1d if scaled_conv else nn.Conv1d
+        if n_bits_weight is not None:
+            def Conv(*args, **kwargs) -> nn.Module:
+                return QuantizedConv1d(
+                    *args,
+                    n_bits_act=n_bits_act,
+                    n_bits_weight=n_bits_weight,
+                    **kwargs
+                )
+            ActBal = nn.Identity
+        else:
+            Conv = ScaledConv1d if scaled_conv else nn.Conv1d
+            ActBal = ActivationBalancer
+
         Act = getattr(nn, activation)
         if act_bal:
             self.sequential = nn.Sequential(
                 Conv(dim, dim // 8, 1),
-                ActivationBalancer(1),
+                ActBal(1),
                 Act(inplace=False),
                 Conv(dim // 8, dim, 1),
-                ActivationBalancer(1),
+                ActBal(1),
             )
         else:
             self.sequential = nn.Sequential(
@@ -129,10 +143,12 @@ class CausalSE(nn.Module):
         else:
             raise ValueError(f"invalid se_gate '{se_gate}'")
     
-    def remove_weight_reparameterizations(self):
+    def remove_weight_reparameterizations(self, ema: bool = True):
         weight = self.sequential[0].weight
         kwargs = dict(device=weight.device, dtype=weight.dtype)
-        self.ema.remove_weight_reparameterizations()
+        if ema:
+            self.ema.remove_weight_reparameterizations()
+
         if not self.scaled_conv:
             return
         dim = self.sequential[0].in_channels
@@ -169,12 +185,12 @@ class CausalSE(nn.Module):
         B, C, L_P = x.shape
         x = x.view(B, C, L_P//chunksize, chunksize).mean(dim=3)  # [B, C, (L+P)//cs]
         x = q(x)
-        
+
         # main network
         x = q(self.ema(x))
         output = self.sequential(x)
         output = self.gate(output)
-        
+
         # expand length from (L+P)//cs to L
         # [B, C, (L+P)//cs] -> [B, C, L+P]
         output = output.repeat_interleave(chunksize, dim=2)
@@ -203,36 +219,60 @@ class ConvBlock(nn.Module):
         use_cache: bool = False,
         chunksize: int = 16,
         scale_limit: float = 2.0,
+        skip: str = "residual",
+        n_bits_act: tp.Optional[int] = None,
+        n_bits_weight: tp.Optional[int] = None,
     ) -> None:
-        super(ConvBlock, self).__init__()
-        self.scaled_conv = scaled_conv
-        self.norm = norm
-        self.scale_limit = scale_limit
-        
-        bias = True
-        if norm == "BatchNorm":
-            Norm = ScaledBatchNorm1d
-            bias = False
-        elif norm == "SyncBatchNorm":
-            Norm = ScaledSyncBatchNorm
-            bias = False
-        elif norm == "BasicNorm":
-            Norm = BasicNorm
-        else:
-            raise RuntimeError(f"invalid norm {norm}")
+        super().__init__()
 
-        if scaled_conv:
-            Conv = ScaledConv1d
-            CausalConv = CausalScaledConv1d
-        else:
-            Conv = nn.Conv1d
-            CausalConv = CausalConv1d
-        
-        if act_bal:
-            ActBal = ActivationBalancer
-            activation_kwargs = {'inplace': False}
-        else:
+        self.scale_limit = scale_limit
+        bias = True
+        if n_bits_weight is not None:
+            def Conv(*args, **kwargs) -> nn.Module:
+                return QuantizedConv1d(
+                    *args,
+                    n_bits_act=n_bits_act,
+                    n_bits_weight=n_bits_weight,
+                    **kwargs
+                )
+            def CausalConv(*args, use_cache: bool = False, **kwargs) -> nn.Module:
+                return QuantizedConv1d(
+                    *args,
+                    causal=True,
+                    n_bits_act=n_bits_act,
+                    n_bits_weight=n_bits_weight,
+                    **kwargs
+                )
+            Norm = nn.Identity
             ActBal = nn.Identity
+
+        else:
+            if scaled_conv:
+                Conv = ScaledConv1d
+                CausalConv = CausalScaledConv1d
+            else:
+                Conv = nn.Conv1d
+                CausalConv = CausalConv1d
+            self.scaled_conv = scaled_conv
+            self.norm = norm
+            
+            bias = True
+            if norm == "BatchNorm":
+                Norm = ScaledBatchNorm1d
+                bias = False
+            elif norm == "SyncBatchNorm":
+                Norm = ScaledSyncBatchNorm
+                bias = False
+            elif norm == "BasicNorm":
+                Norm = BasicNorm
+            else:
+                raise RuntimeError(f"invalid norm {norm}")
+
+            if act_bal:
+                ActBal = ActivationBalancer
+                activation_kwargs = {'inplace': False}
+            else:
+                ActBal = nn.Identity
         
         self.activation = getattr(nn, activation)(**activation_kwargs)
         self.act_bal = ActBal(1)
@@ -243,16 +283,21 @@ class ConvBlock(nn.Module):
             dilation=dilation, use_cache=use_cache)
         self.norm2 = Norm(channels_hidden, affine=False)
         self.pointwise2 = Conv(channels_hidden, channels, 1)
-        self.se = CausalSE(channels, se_activation, scaled_conv, act_bal, se_gate=se_gate,
-                           gamma=gamma, use_cache=use_cache, chunksize=chunksize)
+        self.se = CausalSE(
+            channels, se_activation, scaled_conv, act_bal, se_gate=se_gate,
+            gamma=gamma, use_cache=use_cache, chunksize=chunksize,
+            n_bits_act=n_bits_act,
+            n_bits_weight=n_bits_weight,
+        )
         self.dropout = nn.Dropout(dropout, inplace=True)
-        
-        self.scale = None
-        if zero_init_residual:
-            self.scale = nn.Parameter(torch.zeros(1))
-        self.initial_cache = None
 
-    def remove_weight_reparameterizations(self):
+        self.skip = skip
+        self.scale = nn.Parameter(torch.ones(1))
+        if zero_init_residual:
+            self.scale.data.zero_()
+        self.register_buffer("initial_cache", None)
+
+    def remove_weight_reparameterizations(self, fuse_bn: bool = True, ema: bool = True):
         kwargs = dict(device=self.pointwise1.weight.device, dtype=self.pointwise1.weight.dtype)
         bias = False if self.pointwise1.bias is None else True
         if self.scaled_conv:
@@ -263,7 +308,7 @@ class ConvBlock(nn.Module):
             if bias:
                 self.pointwise1.bias.data.copy_(conv.get_bias())
             conv = self.depthwise
-            self.depthwise = CausalConv1d(
+            self.depthwise = nn.Conv1d(
                 conv.in_channels, conv.out_channels, conv.kernel_size,
                 groups=conv.groups, bias=bias, **kwargs)
             self.depthwise.weight.data.copy_(conv.get_weight())
@@ -273,8 +318,22 @@ class ConvBlock(nn.Module):
             self.pointwise2 = Q(nn.Conv1d(conv.in_channels, conv.out_channels, 1, **kwargs))
             self.pointwise2.weight.data.copy_(conv.get_weight())
             self.pointwise2.bias.data.copy_(conv.get_bias())
-            self.se.remove_weight_reparameterizations()
-        
+            self.se.remove_weight_reparameterizations(ema=ema)
+            if self.initial_cache is None:
+                delattr(self, "initial_cache")
+            self.register_buffer(
+                "initial_cache",
+                torch.zeros(
+                    1,
+                    self.depthwise.in_channels,
+                    self.depthwise.kernel_size[0]-1,
+                    **kwargs
+                )   # [B=1, C, K-1]
+            )
+
+        if not fuse_bn:
+            return
+
         if self.norm in ["BatchNorm", "SyncBatchNorm"]:
             # y = ((x - mean) / std * gamma + beta) * weight
             # <=> y = x * (gamma/std*weight) + (-mean*gamma/std*weight + beta*weight)
@@ -285,11 +344,11 @@ class ConvBlock(nn.Module):
             conv_bias = self.depthwise.bias
             weight = 1 / std
             bias = -mean / std
-            self.initial_cache = torch.stack(
+            initial_cache = torch.stack(
                 [-bias.view(1, -1) for _ in range(self.depthwise.kernel_size[0]-1)],
-                dim=2
+                dim=2,
             )   # [B=1, C, K-1]
-            tmp = torch.cat([bias.view(1, -1, 1), -self.initial_cache], dim=2)  # [B=1, C, K]
+            tmp = torch.cat([bias.view(1, -1, 1), -initial_cache], dim=2)  # [B=1, C, K]
             bias = F.conv1d(tmp, conv_weight, groups=self.depthwise.groups)
             
             channels = conv_weight.size(0)
@@ -306,11 +365,14 @@ class ConvBlock(nn.Module):
                 weight,
                 torch.tensor([1e-12], device=weight.device, dtype=weight.dtype)
             )
-            self.initial_cache /= weight.view(1, -1, 1)
-            self.initial_cache.clamp_(
+            initial_cache /= weight.view(1, -1, 1)
+            initial_cache.clamp_(
                 min=torch.finfo(torch.float16).min,
                 max=torch.finfo(torch.float16).max
             )
+            if self.initial_cache is None:
+                delattr(self, "initial_cache")
+            self.register_buffer("initial_cache", initial_cache)
             self.norm1 = nn.Identity()
             
             mean = self.norm2.running_mean
@@ -354,7 +416,8 @@ class ConvBlock(nn.Module):
         x = self.activation(x)
         x = self.norm1(x)
         if self.initial_cache is not None:
-            x = torch.cat([self.initial_cache, x], dim=2)
+            cache = self.initial_cache.repeat(x.size(0), 1, 1)
+            x = torch.cat([cache, x], dim=2)
         x = self.depthwise(x)
         x = self.act_bal(x)
         x = self.activation(x)
@@ -363,29 +426,40 @@ class ConvBlock(nn.Module):
         x = self.act_bal(x)
         x = self.se(x)
         x = self.dropout(x)
-        
-        if self.scale is not None:
+
+        if self.skip == "residual":
+            # x = inputs + x * self.scale
             self.scale.data.clamp_(min=-self.scale_limit, max=self.scale_limit)
-            x = torch.addcmul(inputs, x, self.scale)    # x = inputs + x * self.scale
-        elif warmup < 1:
-            x = torch.add(inputs, x, alpha=warmup)      # x = inputs + x * warmup
-        else:
-            x = x + inputs
+            x = torch.addcmul(inputs, x, self.scale)
+        elif self.skip == "bypass":
+            # x = inputs * (1- self.scale) + x * self.scale
+            #   = inputs + self.scale * (x - inputs)
+            self.scale.data.clamp_(min=0.0, max=1.0)
+            x = torch.addcmul(inputs, x - inputs, self.scale)
 
         return q(x), x_len
 
 
 class Conv1dSubsampling(nn.Module):
-    def __init__(self, in_ch, out_ch, subsampling_factor, scaled_conv, norm):
+    def __init__(
+        self, in_ch, out_ch, subsampling_factor, scaled_conv, norm,
+        n_bits_act: tp.Optional[int] = None,
+        n_bits_weight: tp.Optional[int] = None,
+    ):
         super().__init__()
         self.scaled_conv = scaled_conv
-        if scaled_conv:
+        if n_bits_weight is not None:
+            def Conv(*args, **kwargs) -> nn.Module:
+                return QuantizedConv1d(*args, **kwargs, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight)
+        elif scaled_conv:
             Conv = ScaledConv1d
         else:
             Conv = nn.Conv1d
 
         bias = True
-        if norm == "BatchNorm":
+        if n_bits_weight is not None:
+            Norm = nn.Identity
+        elif norm == "BatchNorm":
             Norm = ScaledBatchNorm1d
             bias = False
         elif norm == "SyncBatchNorm":
@@ -432,31 +506,33 @@ class Conv1dSubsampling(nn.Module):
 class Encoder(EncoderInterface):
     def __init__(
         self,
-        num_features: int,
+        num_features: int = 80,
         subsampling_factor: int = 4,
-        channels: int = 384,
-        channels_expansion: int = 512,
-        kernel_size: int = 4,
-        dilations: tp.List[int] = [1, 2, 4, 1, 2, 4],
-        output_channels: int = 640,
+        channels: int = 256,
+        channels_expansion: int = 1024,
+        kernel_size: int = 8,
+        dilations: tp.List[int] = [1 for _ in range(11)],
+        output_channels: int = 512,
         dropout: float = 0.075,
         activation: str = 'ReLU',
         activation_kwargs: dict = {'inplace': True},
         norm: str = 'BatchNorm',
         se_activation: str = 'ReLU',
         is_pnnx: bool = False,
-        scaled_conv: bool = False,
+        scaled_conv: bool = True,
         act_bal: bool = False,
-        zero_init_residual: bool = False,
-        se_gate: str = "sigmoid",
-        gamma: float = 0.9,
+        zero_init_residual: bool = True,
+        se_gate: str = "tanh",
+        gamma: float = 0.97,
+        chunksize: int = 8,
         use_cache: bool = False,
         mean: float = -6.375938187300722,
         std: float = 4.354657227491409,
-        chip_fp16: bool = False,
-        chunksize: int = 16,
         scale_limit: float = 2.0,
         conv_pre_norm: bool = False,
+        skip: str = "residual",
+        n_bits_act: tp.Optional[int] = None,
+        n_bits_weight: tp.Optional[int] = None,
     ) -> None:
         super().__init__()
 
@@ -466,8 +542,14 @@ class Encoder(EncoderInterface):
         self.num_features = num_features
         self.subsampling_factor = subsampling_factor
         self.scaled_conv = scaled_conv
-        
-        Conv = ScaledConv1d if scaled_conv else nn.Conv1d
+
+        if n_bits_weight is not None:
+            def Conv(*args, **kwargs) -> nn.Module:
+                return QuantizedConv1d(*args, **kwargs, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight)
+        elif scaled_conv:
+            Conv = ScaledConv1d
+        else:
+            Conv = nn.Conv1d
         
         self.conv_pre = Conv1dSubsampling(
             num_features,
@@ -475,9 +557,9 @@ class Encoder(EncoderInterface):
             subsampling_factor=subsampling_factor,
             scaled_conv=scaled_conv if not conv_pre_norm else False,
             norm=norm if conv_pre_norm else "",
+            n_bits_act=n_bits_act,
+            n_bits_weight=n_bits_weight,
         )
-
-        self.is_pnnx = is_pnnx
 
         self.cnn = nn.ModuleList()
         for dilation in dilations:
@@ -485,21 +567,36 @@ class Encoder(EncoderInterface):
                 channels, channels_expansion, kernel_size, dilation,
                 activation, activation_kwargs, norm, dropout, se_activation,
                 scaled_conv, act_bal, zero_init_residual, se_gate, gamma=gamma,
-                use_cache=use_cache, chunksize=chunksize, scale_limit=scale_limit
+                use_cache=use_cache, chunksize=chunksize, scale_limit=scale_limit,
+                skip=skip, 
+                n_bits_act=n_bits_act,
+                n_bits_weight=n_bits_weight,
             )
             self.cnn.append(layer)
         self.proj = Conv(channels * 2, output_channels, 1, bias=False)
+        self.zero_out_skip = False
     
     @torch.no_grad()
-    def remove_weight_reparameterizations(self):
+    def remove_weight_reparameterizations(
+        self,
+        fuse_bn: bool = True,
+        ema: bool = True,
+        zero_out_skip: bool = False,
+    ):
         if self.scaled_conv:
             proj: ScaledConv1d = self.proj   # type: ignore
             kwargs = dict(device=proj.weight.device, dtype=proj.weight.dtype)
             self.proj = Q(nn.Conv1d(proj.in_channels, proj.out_channels, 1, bias=False, **kwargs))
             self.proj.weight.data.copy_(proj.get_weight())
             self.conv_pre.remove_weight_reparameterizations()
+        if zero_out_skip:
+            C = self.proj.in_channels // 2
+            new_proj = Q(nn.Conv1d(C, self.proj.out_channels, 1, bias=False, **kwargs))
+            new_proj.weight.data.copy_(self.proj.weight.data[:, :C, :])
+            self.proj = new_proj
+            self.zero_out_skip = True
         for layer in self.cnn:
-            layer.remove_weight_reparameterizations()
+            layer.remove_weight_reparameterizations(fuse_bn=fuse_bn, ema=ema)
 
     def forward(
         self,
@@ -542,7 +639,10 @@ class Encoder(EncoderInterface):
         x_in = x
         for block in self.cnn:
             x, lengths = block(x, lengths, warmup)   # [batch_size, channels, time]
-        x = self.proj(torch.cat((x, x_in), dim=1))  # [batch_size, channels_out, time]
+        
+        if not self.zero_out_skip:
+            x = torch.cat((x, x_in), dim=1)
+        x = self.proj(x)    # [batch_size, channels_out, time]
 
         x = x.transpose(1, 2)   # [B, T, C]
         return x, lengths, None
@@ -552,54 +652,34 @@ def test_model(check_unused_params: bool = False):
     import re
     device = "cpu"
     model = Encoder(
-        80,
-        dilations=[1 for _ in range(22)],
-        kernel_size=8,
-        channels=384,
-        channels_expansion=1536,
-        output_channels=512,
-        norm='BatchNorm',
-        num_rnn_layers=0,
-        scaled_conv=True,
-        conv1d_subsampling_version=2,
-        zero_init_residual=True,
-        se_gate="tanh",
+        n_bits_act=8,
+        n_bits_weight=8,
     ).to(device)
-    conv2d_params, conv1d_params, lstm_params = 0, 0, 0
-    conv1d_wo_se, conv1d_se = 0, 0
-    for p in model.conv_pre.parameters():
-        conv2d_params += p.numel()
-    for n, p in model.cnn.named_parameters():
-        conv1d_params += p.numel()
-        if re.search(r"\.se\.", n):
-            conv1d_se += p.numel()
-        else:
-            conv1d_wo_se += p.numel()
-    for n, p in model.proj.named_parameters():
-        conv1d_params += p.numel()
-        conv1d_wo_se += p.numel()
-    if model.lstm is not None:
-        for p in model.lstm.parameters():
-            lstm_params += p.numel()
-    total_params = conv2d_params + conv1d_params + lstm_params
+    with open("exp/en/qat/continual/e200-avg64-a8w8.pt", "rb") as f:
+        state_dict = torch.load(f, map_location=device)
+        new_sd = {}
+        for k, v in state_dict["model"].items():
+            if "initial_cache" in k:
+                continue
+            if k.startswith("encoder."):
+                new_sd[k[8:]] = v
+        model.load_state_dict(new_sd)
+    
+    for module in model.modules():
+        if hasattr(module, "rescale_weight"):
+            module.rescale_weight()
+
     x, lengths, _ = model(
         torch.randn(2, 500, 80, device=device),
         torch.tensor([100, 500], dtype=torch.int64, device=device)
     )
     print(x.shape, lengths)
-    print(
-        f"conv2d: {conv2d_params/1000_000:.2f}M\n"
-        f"conv1d: {conv1d_params/1000_000:.2f}M\n"
-        f"    s&e: {conv1d_se/1000_000:.2f}M\n"
-        f"    else: {conv1d_wo_se/1000_000:.2f}M\n"
-        f"lstm: {lstm_params/1000_000:.2f}M\n"
-        f"total: {total_params/1000_000:.2f}M"
-    )
-    if check_unused_params:
-        (x*0).mean().backward()
-        for n, p in model.named_parameters():
-            if p.grad is None:
-                print(n, p.shape)
+
+    (x*0).mean().backward()
+    for n, p in model.named_parameters():
+        if p.grad is None:
+            print(n, p.shape)
+    print("Total parameters:", sum(p.numel() for p in model.parameters()))
 
 
 if __name__ == "__main__":

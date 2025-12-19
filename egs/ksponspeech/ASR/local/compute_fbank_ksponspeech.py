@@ -65,7 +65,7 @@ def get_args():
     parser.add_argument(
         "--data-dir",
         type=str,
-        default="data",
+        default="~/Documents/icefall/egs/librispeech/ASR/data/ko",
         help="""Path of data directory""",
     )
 
@@ -78,8 +78,7 @@ def compute_fbank_speechtools(
     perturb_speed: Optional[bool] = False,
     data_dir: Optional[str] = "data",
 ):
-    # src_dir = Path(data_dir) / "manifests"
-    src_dir = Path("/home/shahn/Documents/icefall/egs/librispeech/ASR/data/manifests")
+    src_dir = Path(data_dir) / "manifests"
     output_dir = Path(data_dir) / "fbank"
     num_jobs = min(4, os.cpu_count())
     num_mel_bins = 80
@@ -124,7 +123,7 @@ def compute_fbank_speechtools(
         device = "cpu"
     logging.info(f"Device: {device}")
 
-    extractor = CustomFbank(CustomFbankConfig(num_mel_bins=num_mel_bins)).to("cuda")
+    extractor = CustomFbank(CustomFbankConfig(num_mel_bins=num_mel_bins)).to(device)
 
     with get_executor() as ex:  # Initialize the executor only once.
         logging.info(f"Executor: {ex}")

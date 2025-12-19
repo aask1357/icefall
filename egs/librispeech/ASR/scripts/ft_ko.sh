@@ -1,5 +1,5 @@
-model="ema"
-exp="ko/kspon_noisy_ft_from_avg"
+model="ema_limit"
+exp="en/l11_chunk8_g.97_wlimit.3_bypass0init"
 
 CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/ft.py \
     --world-size 4 \

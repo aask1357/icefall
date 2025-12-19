@@ -1,14 +1,14 @@
 model="ema_limit"
-exp="en/l11_chunk8_g.97_wlimit.3"
+exp="en/l11_chunk8_g.97_wlimit.3_bypass0init"
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
+CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
     --start-epoch 1 \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
-    --master-port 54320 \
+    --master-port 54324 \
     --use-fp16 True \
     --encoder-norm SyncBatchNorm \
     --channels 256 \
@@ -17,6 +17,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
+    --skip bypass \
     --zero-init-residual True \
     --se-gate tanh \
     --ema-gamma 0.97 \

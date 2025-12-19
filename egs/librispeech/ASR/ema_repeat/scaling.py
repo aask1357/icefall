@@ -1026,6 +1026,11 @@ class ScaledEmbedding(nn.Module):
             with torch.no_grad():
                 self.weight[self.padding_idx].fill_(0)
 
+    def get_weight(self) -> Tensor:
+        self.scale.data.clamp_(min=-10, max=2)
+        scale = self.scale.exp()
+        return self.weight * scale
+
     def forward(self, input: Tensor) -> Tensor:
         F = torch.nn.functional
         self.scale.data.clamp_(min=-10, max=2)

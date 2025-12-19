@@ -14,6 +14,7 @@ log
 tensorboard
 .ipynb_checkpoints
 fast_beam_search
+delete_it*
 
 # Ignore script
 train.sh

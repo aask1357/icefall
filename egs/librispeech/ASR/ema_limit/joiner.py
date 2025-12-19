@@ -13,10 +13,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Optional
 
 import torch
 import torch.nn as nn
 from scaling import ScaledLinear
+from quantized_layers import QuantizedLinear
 
 from icefall.utils import is_jit_tracing
 
@@ -28,12 +30,51 @@ class Joiner(nn.Module):
         decoder_dim: int,
         joiner_dim: int,
         vocab_size: int,
+        n_bits_act: Optional[int] = None,
+        n_bits_weight: Optional[int] = None,
     ):
         super().__init__()
 
-        self.encoder_proj = ScaledLinear(encoder_dim, joiner_dim)
-        self.decoder_proj = ScaledLinear(decoder_dim, joiner_dim)
-        self.output_linear = ScaledLinear(joiner_dim, vocab_size)
+        if n_bits_weight is None:
+            self.encoder_proj = ScaledLinear(encoder_dim, joiner_dim)
+            self.decoder_proj = ScaledLinear(decoder_dim, joiner_dim)
+            self.output_linear = ScaledLinear(joiner_dim, vocab_size)
+        else:
+            self.encoder_proj = QuantizedLinear(
+                encoder_dim, joiner_dim, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
+            self.decoder_proj = QuantizedLinear(
+                decoder_dim, joiner_dim, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
+            self.output_linear = QuantizedLinear(
+                joiner_dim, vocab_size, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
+
+    def remove_weight_reparameterizations(self):
+        encoder_proj = nn.Linear(
+            self.encoder_proj.in_features,
+            self.encoder_proj.out_features,
+            bias=self.encoder_proj.bias is not None,
+        )
+        decoder_proj = nn.Linear(
+            self.decoder_proj.in_features,
+            self.decoder_proj.out_features,
+            bias=self.decoder_proj.bias is not None,
+        )
+        output_linear = nn.Linear(
+            self.output_linear.in_features,
+            self.output_linear.out_features,
+            bias=self.output_linear.bias is not None,
+        )
+        encoder_proj.weight.data.copy_(self.encoder_proj.get_weight())
+        encoder_proj.bias.data.copy_(self.encoder_proj.get_bias())
+        decoder_proj.weight.data.copy_(self.decoder_proj.get_weight())
+        decoder_proj.bias.data.copy_(self.decoder_proj.get_bias())
+        output_linear.weight.data.copy_(self.output_linear.get_weight())
+        output_linear.bias.data.copy_(self.output_linear.get_bias())
+        self.encoder_proj = encoder_proj
+        self.decoder_proj = decoder_proj
+        self.output_linear = output_linear
 
     def forward(
         self,

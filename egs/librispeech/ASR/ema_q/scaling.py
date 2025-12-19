@@ -585,7 +585,7 @@ class ScaledConv1d(nn.Conv1d):
                 self.dilation,
                 self.groups,
             )
-        if self.gamma == 0.0:
+        if self.gamma == 0.0 or not self.training:
             return x
         with torch.no_grad():
             std_scaled = torch.std(x, dim=(0,1,2), keepdim=False)

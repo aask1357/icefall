@@ -295,6 +295,13 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--compute-cer",
+        type=str2bool,
+        default=False,
+        help="Whether to compute CER instead of WER.",
+    )
+
+    parser.add_argument(
         "--context-size",
         type=int,
         default=2,
@@ -327,6 +334,35 @@ def get_parser():
         fast_beam_search_nbest_LG, and fast_beam_search_nbest_oracle""",
     )
 
+    parser.add_argument(
+        "--start-batch",
+        type=int,
+        default=0,
+    )
+    
+    parser.add_argument(
+        "--prune-range",
+        type=int,
+        default=5,
+        help="The prune range for rnnt loss, it means how many symbols(context)"
+        "we are using to compute the loss",
+    )
+
+    parser.add_argument(
+        "--lm-scale",
+        type=float,
+        default=0.25,
+        help="The scale to smooth the loss with lm "
+        "(output of prediction network) part.",
+    )
+
+    parser.add_argument(
+        "--am-scale",
+        type=float,
+        default=0.0,
+        help="The scale to smooth the loss with am (output of encoder network) part.",
+    )
+
     add_model_arguments(parser)
 
     return parser
@@ -339,6 +375,7 @@ def decode_one_batch(
     batch: dict,
     word_table: Optional[k2.SymbolTable] = None,
     decoding_graph: Optional[k2.Fsa] = None,
+    dtype: torch.dtype = torch.float32,
 ) -> Dict[str, Tuple[List[List[str]], List[List[float]]]]:
     """Decode one batch and return the result in a dict. The dict has the
     following format:
@@ -377,7 +414,7 @@ def decode_one_batch(
     feature = batch["inputs"]
     assert feature.ndim == 3
 
-    feature = feature.to(device)
+    feature = feature.to(device=device, dtype=dtype)
     # at entry, feature is (N, T, C)
 
     supervisions = batch["supervisions"]
@@ -523,6 +560,7 @@ def decode_dataset(
     sp: spm.SentencePieceProcessor,
     word_table: Optional[k2.SymbolTable] = None,
     decoding_graph: Optional[k2.Fsa] = None,
+    dtype: torch.dtype = torch.float32,
 ) -> Dict[str, List[Tuple[str, List[str], List[str], List[float], List[float]]]]:
     """Decode dataset.
 
@@ -587,6 +625,7 @@ def decode_dataset(
             decoding_graph=decoding_graph,
             word_table=word_table,
             batch=batch,
+            dtype=dtype,
         )
 
         for name, (hyps, timestamps_hyp) in hyps_dict.items():
@@ -818,10 +857,13 @@ def main():
 
     model.to(device)
     model.eval()
+
     if params.avg > 1 and params.update_bn and model.encoder.norm == "BatchNorm":
         update_bn(model.encoder, args, sp)
     for p in model.parameters():
         q(p)
+
+    model.encoder.remove_weight_reparameterizations(fuse_bn=True, ema=True, zero_out_skip=True)
 
     if "fast_beam_search" in params.decoding_method:
         if params.decoding_method == "fast_beam_search_nbest_LG":

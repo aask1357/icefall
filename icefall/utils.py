@@ -1784,7 +1784,7 @@ def parse_hyp_and_timestamp(
             # $ sp.decode_pieces([a, b, <unk>, c])
             # expected: 'ab⁇c'
             # result: 'ab ⁇ c'
-            words = sp.decode_pieces(tokens).replace(' ⁇ ', '').split()
+            words = sp.decode_pieces(tokens).replace(' ⁇ ', '⁇').split()
             time = parse_timestamp(tokens, time)
         if len(time) != len(words):
             breakpoint()
