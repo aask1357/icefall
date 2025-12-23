@@ -232,12 +232,6 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
     
     parser.add_argument(
-        "--quantizer-gamma",
-        type=float,
-        default=0.95,
-    )
-    
-    parser.add_argument(
         "--eps",
         type=float,
         default=1.0e-5,
@@ -626,7 +620,6 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         skip=params.skip,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        quantizer_gamma=params.quantizer_gamma,
         eps=params.eps,
     )
     return encoder
@@ -640,7 +633,6 @@ def get_decoder_model(params: AttributeDict) -> nn.Module:
         context_size=params.context_size,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        quantizer_gamma=params.quantizer_gamma,
         eps=params.eps,
     )
     return decoder
@@ -654,7 +646,6 @@ def get_joiner_model(params: AttributeDict) -> nn.Module:
         vocab_size=params.vocab_size,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        quantizer_gamma=params.quantizer_gamma,
         eps=params.eps,
     )
     return joiner
@@ -1168,12 +1159,12 @@ def run(rank, world_size, args):
         model_avg = copy.deepcopy(model)
 
     # Initialize Optimizer
-    ema = {
-        "regex_list": ["ema\\.weight", "encoder\\.cnn\\.\\d+\\.scale"],
+    nowd = {
+        "regex_list": ["ema\\.weight", "encoder\\.cnn\\.\\d+\\.scale", "\\.q_factor$"],
         "weight_decay": 0.0,
         "limit": None,
     }
-    model_params = update_param_groups(model, [ema])
+    model_params = update_param_groups(model, [nowd])
 
     if params.optimizer_name == "AdamW":
         optimizer = torch.optim.AdamW(

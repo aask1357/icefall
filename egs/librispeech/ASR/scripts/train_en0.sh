@@ -1,15 +1,15 @@
-model="ema_limit_q"
-exp="en/w4_lr5e-3_linlr1e-4"
+model="ema_limit_customquant"
+exp="en/scratch/a8w4_omnicorrect_lin5e-3"
 
 CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
-    --start-epoch 198 \
+    --start-epoch 1 \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
     --master-port 54324 \
-    --use-fp16 False \
+    --use-fp16 True \
     --channels 256 \
     --channels-expansion 1024 \
     --dilations-version 11 \
@@ -24,9 +24,11 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --quantizer-gamma 0.95 \
     --eps 1.0e-5 \
+    --n-bits-act 8 \
     --n-bits-weight 4 \
+    --quantizer-mode omni_max \
+    --quantizer-gamma 0.95 \
     --weight-limit 0.3 \
     --data-libri-train True \
     --data-libri-dev-clean True \
@@ -44,11 +46,9 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --num-workers 2 \
     --simple-loss-scale 0.5 \
     --optimizer-name Eve \
-    --scheduler-name LinearWarmupLR \
-    --initial-lr 5e-3 \
-    --lr-warmup-iterations 0 \
-    --lr-gamma 0.98 \
-    --lr-eta-min 1.0e-4 \
     --weight-decay 0.001 \
+    --scheduler-name LinearWarmupLR \
+    --lr-warmup-iterations 0 \
+    --lr-eta-min 1.0e-4 \
     --min-utt-duration 1.0 \
     --max-utt-duration 20.0

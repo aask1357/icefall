@@ -1,15 +1,15 @@
-model="ema_limit_q"
-exp="en/a8w4_g.95"
+model="ema_limit_omni"
+exp="en/scratch/a8w4_omni_lin5e-3_1e-4_real"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
-    --start-epoch 12 \
+    --start-epoch 1 \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
     --master-port 54320 \
-    --use-fp16 False \
+    --use-fp16 True \
     --channels 256 \
     --channels-expansion 1024 \
     --dilations-version 11 \
@@ -24,7 +24,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --quantizer-gamma 0.95 \
     --eps 1.0e-5 \
     --n-bits-act 8 \
     --n-bits-weight 4 \
@@ -45,6 +44,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --num-workers 2 \
     --simple-loss-scale 0.5 \
     --optimizer-name Eve \
+    --initial-lr 5e-3 \
     --weight-decay 0.001 \
+    --scheduler-name LinearWarmupLR \
+    --lr-warmup-iterations 0 \
+    --lr-eta-min 1.0e-4 \
     --min-utt-duration 1.0 \
     --max-utt-duration 20.0
