@@ -1,5 +1,5 @@
-model="ema_limit_omni"
-exp="en/scratch/a8w4_omni_lin5e-3_1e-4_real"
+model="ema_q_hybrid"
+exp="en/scratch/a8w4_hybrid_100_max_lrlin5e-3_nowlimit_coslr"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \
@@ -10,6 +10,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --max-duration 2400 \
     --master-port 54320 \
     --use-fp16 True \
+    --encoder-norm SyncBatchNorm \
     --channels 256 \
     --channels-expansion 1024 \
     --dilations-version 11 \
@@ -24,10 +25,15 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --eps 1.0e-5 \
+    --eps 1.0e-2 \
     --n-bits-act 8 \
     --n-bits-weight 4 \
-    --weight-limit 0.3 \
+    --weight-quantizer-mode max \
+    --quantizer-decay 0.95 \
+    --quantizer-quantile 1.0 \
+    --quantizer-learnable-gamma True \
+    --quantizer-gamma-min 0.01 \
+    --quantizer-gamma-max 1.0 \
     --data-libri-train True \
     --data-libri-dev-clean True \
     --data-libri-dev-other True \
@@ -46,7 +52,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --optimizer-name Eve \
     --initial-lr 5e-3 \
     --weight-decay 0.001 \
-    --scheduler-name LinearWarmupLR \
+    --scheduler-name CosineWarmupLR \
     --lr-warmup-iterations 0 \
     --lr-eta-min 1.0e-4 \
     --min-utt-duration 1.0 \

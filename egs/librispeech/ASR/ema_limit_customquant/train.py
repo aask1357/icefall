@@ -256,7 +256,6 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--weight-limit",
         type=float,
-        default=0.3,
     )
 
     parser.add_argument(

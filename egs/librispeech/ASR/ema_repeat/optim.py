@@ -16,6 +16,7 @@
 
 
 from typing import List, Optional, Union
+import math
 
 import torch
 from torch.optim import Optimizer
@@ -66,7 +67,7 @@ class Eve(Optimizer):
         weight_decay=1e-3,
         target_rms=0.1,
         limit: Optional[float] = None,
-        scale_max: float = 2.0,
+        scale_max: Optional[float] = 2.0,
         channelwise: bool = False,
     ):
         if not 0.0 <= lr:
@@ -393,6 +394,53 @@ class LinearWarmupLR(LRScheduler):
             return [x * scale for x in self.base_lrs]
         else:
             scale = (self.T_max - self.epoch) / (self.T_max - self.start_epoch)
+            return [(x - self.eta_min) * scale + self.eta_min for x in self.base_lrs]
+
+
+class CosineWarmupLR(LRScheduler):
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        warmup_iterations: int,
+        T_max: int = 200,
+        eta_min: float = 0.0,
+    ):
+        self.warmup_iterations = warmup_iterations
+        self.T_max = T_max - 1  # epoch \in {0, 1, ..., T_max - 1}
+        self.eta_min = eta_min
+        self.start_epoch: int = 0
+        super().__init__(optimizer)
+
+    def state_dict(self):
+        """Returns the state of the scheduler as a :class:`dict`.
+
+        It contains an entry for every variable in self.__dict__ which
+        is not the optimizer.
+        """
+        return {
+            "base_lrs": self.base_lrs,
+            "epoch": self.epoch,
+            "batch": self.batch,
+            "start_epoch": self.start_epoch,
+        }
+
+    def step_epoch(self, epoch: Optional[int] = None):
+        if epoch is not None:
+            self.epoch = epoch
+        else:
+            self.epoch = self.epoch + 1
+        if self.batch <= self.warmup_iterations:
+            self.start_epoch = self.epoch
+
+    def get_lr(self):
+        # self.epoch = self.start_epoch -> base_lr
+        # self.epoch = T_max -> eta_min
+        if self.batch <= self.warmup_iterations:
+            scale = self.batch / self.warmup_iterations
+            return [x * scale for x in self.base_lrs]
+        else:
+            freq = (self.epoch - self.start_epoch) / (self.T_max - self.start_epoch)
+            scale = (1 + math.cos(freq * math.pi)) / 2
             return [(x - self.eta_min) * scale + self.eta_min for x in self.base_lrs]
 
 
