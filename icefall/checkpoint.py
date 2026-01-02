@@ -185,6 +185,8 @@ def average_checkpoints(
     for k in uniqued_names:
         if avg[k].is_floating_point():
             avg[k] /= n
+        elif avg[k].dtype == torch.bool:
+            continue
         else:
             avg[k] //= n
 
