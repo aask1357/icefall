@@ -30,7 +30,7 @@ class OmniQuantCuda(torch.autograd.Function):
         grad_output: Tensor
     ) -> Tuple[Tensor, Tensor, None, None]:
         dx_ds, mask = ctx.saved_tensors
-        return grad_output * mask, dx_ds.mul_(grad_output).sum().view(1), None, None
+        return grad_output * mask, dx_ds.mul_(grad_output).float().sum().view(1), None, None
 
 
 class RoundSTE(torch.autograd.Function):
