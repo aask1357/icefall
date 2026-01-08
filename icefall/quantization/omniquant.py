@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 from torch import Tensor
 try:
-    from .kernels import omniquant_cuda
+    from .kernels import omniquant_fast_cuda as omniquant_cuda
     _KERNEL_AVAILABLE = True
 except ImportError:
     print("Warning: Omniquant cuda kernel is not available. Using torch implementation.")
@@ -73,7 +73,7 @@ def omniquant(x: Tensor, scale: Tensor, q: float, inplace: bool = False) -> Tens
 if __name__ == "__main__":
     # cd ../
     # python -m quantization.omniquant
-    DTYPE = torch.float64
+    DTYPE = torch.float16
     import copy
     x1 = torch.randn(10, 20, 30, device="cuda", dtype=DTYPE, requires_grad=True)
     x1.data.mul_(64)
