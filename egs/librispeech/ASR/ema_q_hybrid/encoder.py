@@ -227,6 +227,7 @@ class ConvBlock(nn.Module):
         gamma_min: tp.Optional[float] = 0.1,
         gamma_max: tp.Optional[float] = 10.0,
         weight_quantizer_mode: str = "max",
+        pointwise2_bias: bool = False,
     ) -> None:
         super().__init__()
 
@@ -286,7 +287,7 @@ class ConvBlock(nn.Module):
             channels_hidden, channels_hidden, kernel_size, groups=channels_hidden,
             dilation=dilation, use_cache=use_cache)
         self.norm2 = Norm(channels_hidden, affine=False)
-        self.pointwise2 = Conv(channels_hidden, channels, 1, bias=False, inplace=True)
+        self.pointwise2 = Conv(channels_hidden, channels, 1, bias=pointwise2_bias, inplace=True)
         self.se = CausalSE(
             channels, se_activation, act_bal, se_gate=se_gate,
             gamma=gamma, use_cache=use_cache, chunksize=chunksize,
@@ -469,6 +470,7 @@ class Conv1dSubsampling(nn.Module):
         gamma_min: tp.Optional[float] = 0.1,
         gamma_max: tp.Optional[float] = 10.0,
         weight_quantizer_mode: str = "max",
+        conv2_bias: bool = False,
     ):
         super().__init__()
         def Conv(*args, **kwargs) -> nn.Module:
@@ -492,7 +494,7 @@ class Conv1dSubsampling(nn.Module):
 
         self.conv = nn.Sequential(
             Conv(in_ch, out_ch, 1, bias=False),
-            Conv(out_ch, out_ch, 2*sf, stride=sf, padding=0, groups=out_ch, bias=False),
+            Conv(out_ch, out_ch, 2*sf, stride=sf, padding=0, groups=out_ch, bias=conv2_bias),
         )
 
     def remove_weight_reparameterizations(self):
@@ -549,6 +551,7 @@ class Encoder(EncoderInterface):
         gamma_min: tp.Optional[float] = 0.1,
         gamma_max: tp.Optional[float] = 10.0,
         weight_quantizer_mode: str = "max",
+        redundant_bias: bool = False,
     ) -> None:
         super().__init__()
 
@@ -571,6 +574,7 @@ class Encoder(EncoderInterface):
             gamma_min=gamma_min,
             gamma_max=gamma_max,
             weight_quantizer_mode=weight_quantizer_mode,
+            conv2_bias=redundant_bias,
         )
 
         self.cnn = nn.ModuleList()
@@ -590,6 +594,7 @@ class Encoder(EncoderInterface):
                 gamma_min=gamma_min,
                 gamma_max=gamma_max,
                 weight_quantizer_mode=weight_quantizer_mode,
+                pointwise2_bias=redundant_bias,
             )
             self.cnn.append(layer)
         self.proj = QuantizedConv1d(

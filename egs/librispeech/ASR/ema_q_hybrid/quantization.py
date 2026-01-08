@@ -53,15 +53,16 @@ class ActQuantizer(nn.Module):
         return q_quantile
 
     def forward(self, x: Tensor) -> Tensor:
-        q_quantile = self.get_q_quantile(x)
         if not self._is_initialized_cpu:
             self._is_initialized_cpu = self.is_initialized.item()
             if not self._is_initialized_cpu:
+                q_quantile = self.get_q_quantile(x)
                 self.q_quantile.data.copy_(q_quantile)
                 self.is_initialized.data.fill_(True)
                 self._is_initialized_cpu = True
 
         if self.training:
+            q_quantile = self.get_q_quantile(x)
             self.q_quantile.mul_(self.decay).add_(q_quantile, alpha=1 - self.decay)
 
         scale = self.q_quantile / self.q_max
