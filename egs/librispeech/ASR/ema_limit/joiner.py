@@ -30,6 +30,7 @@ class Joiner(nn.Module):
         decoder_dim: int,
         joiner_dim: int,
         vocab_size: int,
+        activation: str = "Tanh",
         n_bits_act: Optional[int] = None,
         n_bits_weight: Optional[int] = None,
     ):
@@ -49,6 +50,7 @@ class Joiner(nn.Module):
             self.output_linear = QuantizedLinear(
                 joiner_dim, vocab_size, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
             )
+        self.activation = getattr(torch.nn, activation)()
 
     def remove_weight_reparameterizations(self):
         encoder_proj = nn.Linear(
@@ -103,6 +105,6 @@ class Joiner(nn.Module):
         else:
             logit = encoder_out + decoder_out
 
-        logit = self.output_linear(torch.tanh(logit))
+        logit = self.output_linear(self.activation(logit))
 
         return logit

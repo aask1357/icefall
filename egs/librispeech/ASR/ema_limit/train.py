@@ -67,7 +67,7 @@ from lhotse.dataset.sampling.base import CutSampler
 from lhotse.utils import fix_random_seed
 from encoder import Encoder
 from model import Transducer
-from optim import Eden, Eve
+from optim import Eden, Eve, LRScheduler, ExponentialWarmupLR, LinearWarmupLR, CosineWarmupLR
 from plot_params import plot_params
 from custom_fbank import CustomFbankConfig as FbankConfig
 from torch import Tensor
@@ -171,6 +171,20 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--decoder-activation",
+        type=str,
+        default="ReLU",
+        help="Decoder activation. Default: ReLU.",
+    )
+
+    parser.add_argument(
+        "--joiner-activation",
+        type=str,
+        default="Tanh",
+        help="Joiner activation. Default: Tanh.",
+    )
+
+    parser.add_argument(
         "--scaled-conv",
         type=str2bool,
         default=True,
@@ -233,6 +247,12 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         "--ema-gamma",
         type=float,
         default=0.93,
+    )
+
+    parser.add_argument(
+        "--ema-r-activation",
+        type=str,
+        default="sigmoid",
     )
 
     parser.add_argument(
@@ -374,6 +394,34 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--scheduler-name",
+        type=str,
+        default="Eden",
+        choices=["Eden", "ExponentialWarmupLR", "LinearWarmupLR", "CosineWarmupLR"],
+    )
+
+    parser.add_argument(
+        "--lr-warmup-iterations",
+        type=int,
+        default=3000,
+        help="Number of iterations for warmup.",
+    )
+
+    parser.add_argument(
+        "--lr-gamma",
+        type=float,
+        default=0.98,
+        help="Number of iterations for warmup.",
+    )
+
+    parser.add_argument(
+        "--lr-eta-min",
+        type=float,
+        default=1.0e-4,
+        help="Number of iterations for warmup.",
+    )
+
+    parser.add_argument(
         "--lr-batches",
         type=float,
         default=5000,
@@ -485,6 +533,13 @@ def get_parser():
         type=str2bool,
         default=False,
         help="Whether to use half precision training.",
+    )
+
+    parser.add_argument(
+        "--use-bf16",
+        type=str2bool,
+        default=False,
+        help="Whether to use bfloat16 precision training.",
     )
 
     parser.add_argument(
@@ -606,6 +661,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         scale_limit=params.scale_limit,
         conv_pre_norm=params.conv_pre_norm,
         skip=params.skip,
+        ema_r_activation=params.ema_r_activation,
     )
     return encoder
 
@@ -616,6 +672,7 @@ def get_decoder_model(params: AttributeDict) -> nn.Module:
         decoder_dim=params.decoder_dim,
         blank_id=params.blank_id,
         context_size=params.context_size,
+        activation=params.decoder_activation,
     )
     return decoder
 
@@ -626,6 +683,7 @@ def get_joiner_model(params: AttributeDict) -> nn.Module:
         decoder_dim=params.decoder_dim,
         joiner_dim=params.joiner_dim,
         vocab_size=params.vocab_size,
+        activation=params.joiner_activation,
     )
     return joiner
 
@@ -794,7 +852,7 @@ def compute_loss(
     feature = batch["inputs"]
     # at entry, feature is (N, T, C)
     assert feature.ndim == 3
-    feature = feature.to(device)
+    feature = feature.to(device=device, dtype=params.dtype)
 
     supervisions = batch["supervisions"]
     feature_lens = supervisions["num_frames"].to(device)
@@ -1118,7 +1176,12 @@ def run(rank, world_size, args):
     device = torch.device("cpu")
     if torch.cuda.is_available():
         device = torch.device("cuda", rank)
-    logging.info(f"Device: {device}")
+    params.dtype = torch.float32
+    if params.use_bf16:
+        assert torch.cuda.is_bf16_supported(), "Your GPU does not support bf16."
+        assert not params.use_fp16, "Cannot use both fp16 and bf16."
+        params.dtype = torch.bfloat16
+    logging.info(f"Device: {device}, dtype: {params.dtype}")
 
     sp = spm.SentencePieceProcessor()
     sp.load(params.bpe_model)
@@ -1146,7 +1209,7 @@ def run(rank, world_size, args):
         params=params, model=model, model_avg=model_avg
     )
 
-    model.to(device)
+    model.to(device=device, dtype=params.dtype)
     if world_size > 1:
         logging.info("Using DDP")
         model = DDP(model, device_ids=[rank])
@@ -1169,7 +1232,17 @@ def run(rank, world_size, args):
     else:
         raise ValueError(f"Unsupported optimizer: {params.optimizer_name}")
 
-    scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
+    # Initialize LRScheduler
+    if params.scheduler_name == "Eden":
+        scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
+    elif params.scheduler_name == "ExponentialWarmupLR":
+        scheduler = ExponentialWarmupLR(optimizer, params.lr_warmup_iterations, params.lr_gamma)
+    elif params.scheduler_name == "LinearWarmupLR":
+        scheduler = LinearWarmupLR(optimizer, params.lr_warmup_iterations, params.num_epochs, params.lr_eta_min)
+    elif params.scheduler_name == "CosineWarmupLR":
+        scheduler = CosineWarmupLR(optimizer, params.lr_warmup_iterations, params.num_epochs, params.lr_eta_min)
+    else:
+        raise ValueError(f"Unsupported scheduler: {params.scheduler_name}")
 
     if checkpoints and "optimizer" in checkpoints:
         logging.info("Loading optimizer state dict")

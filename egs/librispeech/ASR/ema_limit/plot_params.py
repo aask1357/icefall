@@ -26,13 +26,13 @@ def plot_params(
     for param_name, param in model.named_parameters():
         if param.numel() == 0:
             continue
-        dict_to_plot[f"param/{join(model_name, param_name)}"] = param.data.detach().cpu().numpy()
+        dict_to_plot[f"param/{join(model_name, param_name)}"] = param.data.detach().float().cpu().numpy()
     for buffer_name, buffer in model.named_buffers():
         if buffer.numel() == 0:
             continue
         if torch.any(torch.isnan(buffer.data)) or torch.any(torch.isinf(buffer.data)):
             continue
-        dict_to_plot[f"buffer/{join(model_name, buffer_name)}"] = buffer.data.detach().cpu().numpy()
+        dict_to_plot[f"buffer/{join(model_name, buffer_name)}"] = buffer.data.detach().float().cpu().numpy()
 
 
 if __name__=="__main__":

@@ -96,6 +96,7 @@ class CausalSE(nn.Module):
         chunksize: int = 16,
         se_gate: str = "sigmoid",
         gamma: float = 0.9,
+        ema_r_activation: str = "sigmoid",
         use_cache: bool = False,
         n_bits_act: tp.Optional[int] = None,
         n_bits_weight: tp.Optional[int] = None,
@@ -107,7 +108,10 @@ class CausalSE(nn.Module):
         self.scaled_conv = scaled_conv
         self.activation = activation
 
-        self.ema = EMA(dim, r_max=gamma, init_method="uniform", use_cache=use_cache)
+        self.ema = EMA(
+            dim, r_max=gamma, init_method="uniform",
+            r_activation=ema_r_activation, use_cache=use_cache
+        )
         if n_bits_weight is not None:
             def Conv(*args, **kwargs) -> nn.Module:
                 return QuantizedConv1d(
@@ -220,6 +224,7 @@ class ConvBlock(nn.Module):
         chunksize: int = 16,
         scale_limit: float = 2.0,
         skip: str = "residual",
+        ema_r_activation: str = "sigmoid",
         n_bits_act: tp.Optional[int] = None,
         n_bits_weight: tp.Optional[int] = None,
     ) -> None:
@@ -286,6 +291,7 @@ class ConvBlock(nn.Module):
         self.se = CausalSE(
             channels, se_activation, scaled_conv, act_bal, se_gate=se_gate,
             gamma=gamma, use_cache=use_cache, chunksize=chunksize,
+            ema_r_activation=ema_r_activation,
             n_bits_act=n_bits_act,
             n_bits_weight=n_bits_weight,
         )
@@ -531,6 +537,7 @@ class Encoder(EncoderInterface):
         scale_limit: float = 2.0,
         conv_pre_norm: bool = False,
         skip: str = "residual",
+        ema_r_activation: str = "sigmoid",
         n_bits_act: tp.Optional[int] = None,
         n_bits_weight: tp.Optional[int] = None,
     ) -> None:
@@ -568,7 +575,7 @@ class Encoder(EncoderInterface):
                 activation, activation_kwargs, norm, dropout, se_activation,
                 scaled_conv, act_bal, zero_init_residual, se_gate, gamma=gamma,
                 use_cache=use_cache, chunksize=chunksize, scale_limit=scale_limit,
-                skip=skip, 
+                skip=skip, ema_r_activation=ema_r_activation,
                 n_bits_act=n_bits_act,
                 n_bits_weight=n_bits_weight,
             )

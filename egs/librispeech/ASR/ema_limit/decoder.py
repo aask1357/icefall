@@ -42,6 +42,7 @@ class Decoder(nn.Module):
         decoder_dim: int,
         blank_id: int,
         context_size: int,
+        activation: str = "ReLU",
         n_bits_act: Optional[int] = None,
         n_bits_weight: Optional[int] = None,
     ):
@@ -96,6 +97,7 @@ class Decoder(nn.Module):
         else:
             # It is to support torch script
             self.conv = nn.Identity()
+        self.activation = getattr(torch.nn, activation)()
 
     def remove_weight_reparameterizations(self):
         embedding = nn.Embedding(
@@ -160,5 +162,5 @@ class Decoder(nn.Module):
                     assert embedding_out.size(-1) == self.context_size
             embedding_out = self.conv(embedding_out)
             embedding_out = embedding_out.permute(0, 2, 1)
-        embedding_out = F.relu(embedding_out)
+        embedding_out = self.activation(embedding_out)
         return embedding_out

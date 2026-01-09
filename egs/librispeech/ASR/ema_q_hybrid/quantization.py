@@ -6,6 +6,14 @@ import torch.nn as nn
 from icefall.quantization import omniquant
 
 
+FTMODE = False
+
+
+def set_finetuning_mode():
+    global FTMODE
+    FTMODE = True
+
+
 class Round(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x: torch.Tensor) -> torch.Tensor:
@@ -43,6 +51,29 @@ class ActQuantizer(nn.Module):
             self.gamma_min = gamma_min
             self.gamma_max = gamma_max
 
+        if FTMODE:
+            from torchao.quantization.granularity import PerTensor
+            from torchao.quantization.observer import AffineQuantizedMSEObserver
+            from torchao.quantization.quant_primitives import MappingType, ZeroPointDomain
+            self.act_obs = AffineQuantizedMSEObserver(
+                MappingType.SYMMETRIC,
+                torch.int8,
+                granularity=PerTensor() ,
+                eps=torch.finfo(torch.float32).eps,
+                scale_dtype=torch.float32,
+                zero_point_dtype=torch.float32,
+                zero_point_domain=ZeroPointDomain.NONE,
+                steps=100,
+                quant_min=-self.q_max,
+                quant_max=self.q_max,
+            )
+            if not learnable_gamma:
+                self.learnable_gamma = True
+                self.gamma_min = 1.0e-10
+                self.gamma_max = 1.0e+10
+                self.register_buffer("gamma", torch.ones((1,)))
+                self.gamma: Tensor
+
     @torch.no_grad()
     def get_q_quantile(self, x: Tensor) -> Tensor:
         if self.q == 1.0:
@@ -60,6 +91,12 @@ class ActQuantizer(nn.Module):
                 self.q_quantile.data.copy_(q_quantile)
                 self.is_initialized.data.fill_(True)
                 self._is_initialized_cpu = True
+                if hasattr(self, "act_obs"):
+                    self.act_obs(x)
+                    scale, _ = self.act_obs.calculate_qparams()
+                    self.gamma.data.copy_(scale / self.q_quantile * self.q_max)
+                    print(scale.data.item(), self.gamma.data.item())
+                    delattr(self, "act_obs")
 
         if self.training:
             q_quantile = self.get_q_quantile(x)

@@ -1,13 +1,14 @@
-model="ema_norm"
-exp="en/norm_bypass1_chunk8_ipa3"
+model="ema_limit"
 
-CUDA_VISIBLE_DEVICES=4,5 ${model}/train.py \
-    --world-size 2 \
+exp="en/jsilu_emaidentity"
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
+    --world-size 4 \
     --num-epochs 200 \
     --start-epoch 1 \
     --exp-dir exp/$exp \
     --full-libri 1 \
-    --max-duration 4000 \
+    --max-duration 2400 \
     --master-port 54324 \
     --use-fp16 True \
     --encoder-norm SyncBatchNorm \
@@ -17,17 +18,20 @@ CUDA_VISIBLE_DEVICES=4,5 ${model}/train.py \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
-    --skip bypass-oneinit \
+    --skip residual \
+    --zero-init-residual True \
     --se-gate tanh \
-    --ema-gamma 0.93 \
+    --ema-gamma 0.97 \
+    --ema-r-activation identity \
     --chunksize 8 \
     --encoder-dim 512 \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --clamp-method None \
-    --conv-pre-norm True \
-    --conv-post-norm False \
+    --act-bal True \
+    --whitener True \
+    --joiner-activation SiLU \
+    --weight-limit 0.3 \
     --data-libri-train True \
     --data-libri-dev-clean True \
     --data-libri-dev-other True \
@@ -47,4 +51,111 @@ CUDA_VISIBLE_DEVICES=4,5 ${model}/train.py \
     --weight-decay 0.001 \
     --min-utt-duration 1.0 \
     --max-utt-duration 20.0
-    # --weight-limit 0.3 \
+
+model="ema_limit"
+exp="en/jsilu_bpemax4"
+CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
+    --world-size 4 \
+    --num-epochs 200 \
+    --start-epoch 1 \
+    --exp-dir exp/$exp \
+    --full-libri 1 \
+    --max-duration 2400 \
+    --master-port 54320 \
+    --use-fp16 True \
+    --encoder-norm SyncBatchNorm \
+    --channels 256 \
+    --channels-expansion 1024 \
+    --dilations-version 11 \
+    --kernel-size 8 \
+    --encoder-activation ReLU \
+    --encoder-se-activation ReLU \
+    --skip residual \
+    --zero-init-residual True \
+    --se-gate tanh \
+    --ema-gamma 0.97 \
+    --ema-r-activation sigmoid \
+    --chunksize 8 \
+    --encoder-dim 512 \
+    --decoder-dim 256 \
+    --joiner-dim 256 \
+    --encoder-dropout 0.075 \
+    --act-bal True \
+    --whitener True \
+    --joiner-activation SiLU \
+    --weight-limit 0.3 \
+    --data-libri-train True \
+    --data-libri-dev-clean True \
+    --data-libri-dev-other True \
+    --data-ksponspeech-train False \
+    --data-ksponspeech-dev False \
+    --data-zeroth-train False \
+    --data-zeroth-test False \
+    --data-command-nor-train False \
+    --data-freetalk-nor-train False \
+    --on-the-fly-feats False \
+    --bpe-model data/en/bpe_max4/bpe.model \
+    --manifest-dir data/en/fbank \
+    --cutset-text text \
+    --num-workers 2 \
+    --simple-loss-scale 0.5 \
+    --optimizer-name Eve \
+    --weight-decay 0.001 \
+    --min-utt-duration 1.0 \
+    --max-utt-duration 20.0
+
+model="ema_limit"
+exp="en/jsilu_bpemax4_coslr3e-3"
+CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
+    --world-size 4 \
+    --num-epochs 200 \
+    --start-epoch 1 \
+    --exp-dir exp/$exp \
+    --full-libri 1 \
+    --max-duration 2400 \
+    --master-port 54320 \
+    --use-fp16 True \
+    --encoder-norm SyncBatchNorm \
+    --channels 256 \
+    --channels-expansion 1024 \
+    --dilations-version 11 \
+    --kernel-size 8 \
+    --encoder-activation ReLU \
+    --encoder-se-activation ReLU \
+    --skip residual \
+    --zero-init-residual True \
+    --se-gate tanh \
+    --ema-gamma 0.97 \
+    --ema-r-activation sigmoid \
+    --chunksize 8 \
+    --encoder-dim 512 \
+    --decoder-dim 256 \
+    --joiner-dim 256 \
+    --encoder-dropout 0.075 \
+    --act-bal True \
+    --whitener True \
+    --joiner-activation SiLU \
+    --weight-limit 0.3 \
+    --data-libri-train True \
+    --data-libri-dev-clean True \
+    --data-libri-dev-other True \
+    --data-ksponspeech-train False \
+    --data-ksponspeech-dev False \
+    --data-zeroth-train False \
+    --data-zeroth-test False \
+    --data-command-nor-train False \
+    --data-freetalk-nor-train False \
+    --on-the-fly-feats False \
+    --bpe-model data/en/bpe_max4/bpe.model \
+    --manifest-dir data/en/fbank \
+    --cutset-text text \
+    --num-workers 2 \
+    --simple-loss-scale 0.5 \
+    --optimizer-name Eve \
+    --weight-decay 0.001 \
+    --initial-lr 3e-3 \
+    --scheduler-name CosineWarmupLR \
+    --lr-warmup-iterations 0 \
+    --lr-eta-min 1.0e-4 \
+    --min-utt-duration 1.0 \
+    --max-utt-duration 20.0

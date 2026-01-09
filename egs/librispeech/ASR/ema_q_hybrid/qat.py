@@ -49,6 +49,7 @@ from plot_params import plot_params
 from beam_search import fast_beam_search_one_best
 from custom_utils import MetricsTracker, write_error_stats
 from train import add_model_arguments
+from quantization import set_finetuning_mode
 
 
 LRSchedulerType = Union[torch.optim.lr_scheduler._LRScheduler, LRScheduler]
@@ -1011,6 +1012,7 @@ def run(rank, world_size, args):
     logging.info(params)
 
     logging.info("About to create model")
+    set_finetuning_mode()
     model = get_transducer_model(params)
 
     num_param = sum([p.numel() for p in model.parameters()])
@@ -1083,8 +1085,18 @@ def run(rank, world_size, args):
 
     if checkpoints is None:
         params.cur_epoch = 0
-        # use_fp16 = params.use_fp16
-        # params.use_fp16 = False
+        batch = next(iter(train_dl))
+        model.train()
+        with torch.amp.autocast("cuda", enabled=params.use_fp16):
+            loss, loss_info = compute_loss(
+                params=params,
+                model=model,
+                sp=sp,
+                batch=batch,
+                is_training=False,
+                warmup=(params.batch_idx_train / (params.model_warmup_step + 0.1)),
+                rank=rank,
+            )
         valid_one_epoch(
             params=params,
             model=model,
