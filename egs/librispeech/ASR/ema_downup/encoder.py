@@ -540,7 +540,6 @@ class Encoder(EncoderInterface):
         ema_r_activation: str = "sigmoid",
         n_bits_act: tp.Optional[int] = None,
         n_bits_weight: tp.Optional[int] = None,
-        out_skip: bool = True,
     ) -> None:
         super().__init__()
 
@@ -581,17 +580,13 @@ class Encoder(EncoderInterface):
                 n_bits_weight=n_bits_weight,
             )
             self.cnn.append(layer)
-        self.out_skip = out_skip
-        in_ch = channels * 2 if out_skip else channels
-        self.proj = Conv(in_ch, output_channels, 1, bias=False)
-        print(f"out_skip: {out_skip}")
+        self.proj = Conv(channels, output_channels, 1, bias=False)
     
     @torch.no_grad()
     def remove_weight_reparameterizations(
         self,
         fuse_bn: bool = True,
         ema: bool = True,
-        zero_out_skip: bool = False,
     ):
         if self.scaled_conv:
             proj: ScaledConv1d = self.proj   # type: ignore
@@ -599,12 +594,6 @@ class Encoder(EncoderInterface):
             self.proj = Q(nn.Conv1d(proj.in_channels, proj.out_channels, 1, bias=False, **kwargs))
             self.proj.weight.data.copy_(proj.get_weight())
             self.conv_pre.remove_weight_reparameterizations()
-        if zero_out_skip and self.out_skip:
-            C = self.proj.in_channels // 2
-            new_proj = Q(nn.Conv1d(C, self.proj.out_channels, 1, bias=False, **kwargs))
-            new_proj.weight.data.copy_(self.proj.weight.data[:, :C, :])
-            self.proj = new_proj
-            self.zero_out_skip = True
         for layer in self.cnn:
             layer.remove_weight_reparameterizations(fuse_bn=fuse_bn, ema=ema)
 
@@ -646,12 +635,9 @@ class Encoder(EncoderInterface):
         if not torch.jit.is_tracing():
             assert x.size(2) == lengths.max().item()
 
-        x_in = x
         for block in self.cnn:
             x, lengths = block(x, lengths, warmup)   # [batch_size, channels, time]
-
-        if self.out_skip:
-            x = torch.cat((x, x_in), dim=1)
+        
         x = self.proj(x)    # [batch_size, channels_out, time]
 
         x = x.transpose(1, 2)   # [B, T, C]

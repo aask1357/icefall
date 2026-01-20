@@ -5,7 +5,9 @@ import argparse
 import copy
 import logging
 import warnings
+import os
 from pathlib import Path
+from shutil import copyfile
 from typing import Any, Dict, Optional, Tuple, Union
 
 import k2
@@ -41,7 +43,7 @@ from joiner import Joiner
 from partition_params import update_param_groups
 from encoder import Encoder
 from model import Transducer
-from optim import Eden, Eve, LRScheduler, ExponentialWarmupLR, LinearWarmupLR, CosineWarmupLR
+from optim import Eden, Eve, LRScheduler, ExponentialWarmupLR
 from plot_params import plot_params
 from beam_search import fast_beam_search_one_best
 from custom_utils import MetricsTracker, write_error_stats
@@ -51,6 +53,12 @@ LRSchedulerType = Union[torch.optim.lr_scheduler._LRScheduler, LRScheduler]
 
 
 def add_model_arguments(parser: argparse.ArgumentParser):
+    parser.add_argument(
+        "--encoder-dim",
+        type=int,
+        default=512,
+        help="Encoder output dimension.",
+    )
     
     parser.add_argument(
         "--channels",
@@ -117,13 +125,6 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         type=int,
         default=512,
         help="Joiner output dimension.",
-    )
-
-    parser.add_argument(
-        "--joiner-activation",
-        type=str,
-        default="Tanh",
-        help="Joiner activation. Default: Tanh.",
     )
 
     parser.add_argument(
@@ -220,49 +221,17 @@ def add_model_arguments(parser: argparse.ArgumentParser):
         type=int,
         default=4,
     )
-
+    
     parser.add_argument(
         "--n-bits-act",
         type=int,
+        default=8,
     )
-
+    
     parser.add_argument(
         "--n-bits-weight",
         type=int,
         default=8,
-    )
-
-    parser.add_argument(
-        "--eps",
-        type=float,
-        default=1.0e-5,
-    )
-
-    parser.add_argument(
-        "--weight-quantizer-mode",
-        type=str,
-        default="scale",
-        choices=[
-            "max_gamma", "max", "scale",
-        ],
-    )
-
-    parser.add_argument(
-        "--quantizer-gamma-lr-ratio",
-        type=float,
-        default=1.0,
-    )
-
-    parser.add_argument(
-        "--weight-limit",
-        type=float,
-    )
-
-    parser.add_argument(
-        "--skip",
-        type=str,
-        default="residual",
-        choices=["residual", "bypass", "bypass-zeroinit", "residual-zeroinit"],
     )
 
 
@@ -351,7 +320,7 @@ def get_parser():
         "--weight-decay-projection",
         type=float,
         default=1e-5,
-        help="Only used when optimizer==AdamP.",
+        help="Not Used. Ignore it.",
     )
 
     parser.add_argument(
@@ -366,7 +335,7 @@ def get_parser():
         "--scheduler-name",
         type=str,
         default="Eden",
-        choices=["Eden", "ExponentialWarmupLR", "LinearWarmupLR", "CosineWarmupLR"],
+        choices=["Eden", "ExponentialWarmupLR"],
     )
 
     parser.add_argument(
@@ -380,13 +349,6 @@ def get_parser():
         "--lr-gamma",
         type=float,
         default=0.98,
-        help="Number of iterations for warmup.",
-    )
-
-    parser.add_argument(
-        "--lr-eta-min",
-        type=float,
-        default=1.0e-4,
         help="Number of iterations for warmup.",
     )
 
@@ -592,6 +554,7 @@ def get_params() -> AttributeDict:
             # "subsampling_factor": 4,
             # parameters for Noam
             "env_info": get_env_info(),
+            "is_pnnx": False,
         }
     )
 
@@ -618,10 +581,12 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         channels_expansion=params.channels_expansion,
         kernel_size=params.kernel_size,
         dilations=dilations,
+        output_channels=params.encoder_dim,
         dropout=params.encoder_dropout,
         activation=params.encoder_activation,
         norm=params.encoder_norm,
         se_activation=params.encoder_se_activation,
+        scaled_conv=params.scaled_conv,
         act_bal=params.act_bal,
         zero_init_residual=params.zero_init_residual,
         se_gate=params.se_gate,
@@ -631,11 +596,8 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         std=params.encoder_std,
         chunksize=params.chunksize,
         scale_limit=params.scale_limit,
-        skip=params.skip,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        eps=params.eps,
-        weight_quantizer_mode=params.weight_quantizer_mode,
     )
     return encoder
 
@@ -648,23 +610,18 @@ def get_decoder_model(params: AttributeDict) -> nn.Module:
         context_size=params.context_size,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        eps=params.eps,
-        weight_quantizer_mode=params.weight_quantizer_mode,
     )
     return decoder
 
 
 def get_joiner_model(params: AttributeDict) -> nn.Module:
     joiner = Joiner(
-        encoder_dim=params.channels,
+        encoder_dim=params.encoder_dim,
         decoder_dim=params.decoder_dim,
         joiner_dim=params.joiner_dim,
         vocab_size=params.vocab_size,
-        activation=params.joiner_activation,
         n_bits_act=params.n_bits_act,
         n_bits_weight=params.n_bits_weight,
-        eps=params.eps,
-        weight_quantizer_mode=params.weight_quantizer_mode,
     )
     return joiner
 
@@ -678,7 +635,7 @@ def get_transducer_model(params: AttributeDict) -> nn.Module:
         encoder=encoder,
         decoder=decoder,
         joiner=joiner,
-        encoder_dim=params.channels,
+        encoder_dim=params.encoder_dim,
         decoder_dim=params.decoder_dim,
         joiner_dim=params.joiner_dim,
         vocab_size=params.vocab_size,
@@ -689,16 +646,45 @@ def get_transducer_model(params: AttributeDict) -> nn.Module:
 def load_checkpoint_if_available(
     params: AttributeDict,
     model: nn.Module,
-    model_avg: Optional[nn.Module] = None,
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler: Optional[LRSchedulerType] = None,
-    scaler: Optional[GradScaler] = None,
-) -> Optional[Dict[str, Any]]:
-    if params.start_epoch == 1:
-        return None
+    rank: int = 0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[nn.Module]]:
+    if params.start_epoch > 1:
+        filename = params.exp_dir / f"epoch-{params.start_epoch-1}.pt"
+    else:
+        if params.ft_path is not None:
+            # Load pretrained checkpoint -> rescale weight
+            sd = torch.load(
+                params.ft_path, weights_only=False,
+                map_location="cpu"
+            )
+            new_sd = {}
+            for k, v in sd["model"].items():
+                if "initial_cache" in k:
+                    continue
+                new_sd[k] = v
+            model.load_state_dict(new_sd)
 
-    filename = params.exp_dir / f"epoch-{params.start_epoch-1}.pt"
+        for module in model.modules():
+            if hasattr(module, "rescale_weight"):
+                module.rescale_weight()
+
+        model_avg: Optional[nn.Module] = None
+        if rank == 0:
+            model_avg = copy.deepcopy(model)
+        return None, model_avg
+
     assert filename.is_file(), f"{filename} does not exist!"
+
+    # Rescale weight -> load checkpoint
+    for module in model.modules():
+        if hasattr(module, "rescale_weight"):
+            module.rescale_weight()
+
+    model_avg: Optional[nn.Module] = None
+    if rank == 0:
+        model_avg = copy.deepcopy(model)
 
     saved_params = load_checkpoint(
         filename,
@@ -706,13 +692,13 @@ def load_checkpoint_if_available(
         model_avg=model_avg,
         optimizer=optimizer,
         scheduler=scheduler,
-        scaler=scaler,
     )
 
-    if saved_params and "batch_idx_train" in saved_params:
-        params.batch_idx_train = saved_params["batch_idx_train"]
+    if params.start_batch > 0:
+        if "cur_epoch" in saved_params:
+            params["start_epoch"] = saved_params["cur_epoch"]
 
-    return saved_params
+    return saved_params, model_avg
 
 
 def save_checkpoint(
@@ -902,7 +888,7 @@ def compute_validation_loss(
             value=LOG_EPSILON,
         )
         feature_lens += num_tail_padded_frames
-        with torch.autocast("cuda", enabled=params.use_fp16):
+        with torch.amp.autocast("cuda", enabled=params.use_fp16):
             encoder_out, feature_lens, _ = _model.encoder(feature, feature_lens, warmup=2.0)
 
             # Calculate WER
@@ -1021,7 +1007,7 @@ def train_one_epoch(
         )
 
         try:
-            with torch.autocast("cuda", enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, loss_info = compute_loss(
                     params=params,
                     model=model,
@@ -1167,36 +1153,25 @@ def run(rank, world_size, args):
 
     logging.info("About to create model")
     model = get_transducer_model(params)
-    model.to(device)
 
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of model parameters: {num_param}")
 
-    model_avg: Optional[nn.Module] = None
-    if rank == 0:
-        model_avg = copy.deepcopy(model)
-
-    # Initialize Optimizer
-    no_wd = dict(
-        regex_list = [
-            "ema\\.weight",
-            "encoder\\.cnn\\.\\d+\\.scale",
-            "\\.quantizer_(act|weight)\\.gamma$",
-        ],
-        weight_decay = 0.0,
-        limit = None,
-        scale_max = None,
+    assert params.start_epoch > 0, params.start_epoch
+    checkpoints, model_avg = load_checkpoint_if_available(
+        params=params, model=model, rank=rank
     )
-    if params.quantizer_gamma_lr_ratio == 1.0:
-        model_params = update_param_groups(model, [no_wd])
-    else:
-        q_gamma = dict(
-            regex_list = [
-                "\\.quantizer_(act|weight)\\.gamma$",
-            ],
-            lr = params.initial_lr * params.quantizer_gamma_lr_ratio,
-        )
-        model_params = update_param_groups(model, [no_wd, q_gamma])
+    model.to(device)
+
+    if world_size > 1:
+        logging.info("Using DDP")
+        model = DDP(model, device_ids=[rank])
+
+    ema = {
+        "regex_list": ["ema\\.weight", "encoder\\.cnn\\.\\d+\\.scale"],
+        "weight_decay": 0.0,
+    }
+    model_params = update_param_groups(model, [ema])
 
     if params.optimizer_name == "AdamW":
         optimizer = torch.optim.AdamW(
@@ -1205,51 +1180,28 @@ def run(rank, world_size, args):
             weight_decay=params.weight_decay,
         )
     elif params.optimizer_name == "Eve":
-        optimizer = Eve(model_params, lr=params.initial_lr, limit=params.weight_limit)
+        optimizer = Eve(model_params, lr=params.initial_lr)
     else:
         raise ValueError(f"Unsupported optimizer: {params.optimizer_name}")
 
-    # Initialize LRScheduler
     if params.scheduler_name == "Eden":
         scheduler = Eden(optimizer, params.lr_batches, params.lr_epochs)
     elif params.scheduler_name == "ExponentialWarmupLR":
         scheduler = ExponentialWarmupLR(optimizer, params.lr_warmup_iterations, params.lr_gamma)
-    elif params.scheduler_name == "LinearWarmupLR":
-        scheduler = LinearWarmupLR(optimizer, params.lr_warmup_iterations, params.num_epochs, params.lr_eta_min)
-    elif params.scheduler_name == "CosineWarmupLR":
-        scheduler = CosineWarmupLR(optimizer, params.lr_warmup_iterations, params.num_epochs, params.lr_eta_min)
     else:
         raise ValueError(f"Unsupported scheduler: {params.scheduler_name}")
 
-    # Initialize scaler
-    scaler = GradScaler("cuda", enabled=params.use_fp16)
+    if checkpoints and "optimizer" in checkpoints:
+        logging.info("Loading optimizer state dict")
+        optimizer.load_state_dict(checkpoints["optimizer"])
 
-    assert params.start_epoch > 0, params.start_epoch
-    checkpoints = load_checkpoint_if_available(
-        params=params, model=model, model_avg=model_avg,
-        optimizer=optimizer, scheduler=scheduler,
-        scaler=scaler,
-    )
-
-    if world_size > 1:
-        logging.info("Using DDP")
-        model = DDP(model, device_ids=[rank])
-
-    # if checkpoints and "optimizer" in checkpoints:
-    #     logging.info("Loading optimizer state dict")
-    #     optimizer.load_state_dict(checkpoints["optimizer"])
-
-    # if (
-    #     checkpoints
-    #     and "scheduler" in checkpoints
-    #     and checkpoints["scheduler"] is not None
-    # ):
-    #     logging.info("Loading scheduler state dict")
-    #     scheduler.load_state_dict(checkpoints["scheduler"])
-
-    # if checkpoints and "grad_scaler" in checkpoints:
-    #     logging.info("Loading grad scaler state dict")
-    #     scaler.load_state_dict(checkpoints["grad_scaler"])
+    if (
+        checkpoints
+        and "scheduler" in checkpoints
+        and checkpoints["scheduler"] is not None
+    ):
+        logging.info("Loading scheduler state dict")
+        scheduler.load_state_dict(checkpoints["scheduler"])
 
     if params.print_diagnostics:
         diagnostic = diagnostics.attach_diagnostics(model)
@@ -1259,6 +1211,24 @@ def run(rank, world_size, args):
 
     valid_dl_dict = datamodule.get_valid_dataloader_dict(params)
     decoding_graph = k2.trivial_graph(params.vocab_size - 1, device=device)
+
+    if checkpoints is None:
+        params.cur_epoch = 0
+        valid_one_epoch(
+            params=params,
+            model=model,
+            sp=sp,
+            valid_dl_dict=valid_dl_dict,
+            world_size=world_size,
+            tb_writer=tb_writer,
+            rank=rank,
+            decoding_graph=decoding_graph,
+        )
+
+    scaler = GradScaler("cuda", enabled=params.use_fp16)
+    if checkpoints and "grad_scaler" in checkpoints:
+        logging.info("Loading grad scaler state dict")
+        scaler.load_state_dict(checkpoints["grad_scaler"])
 
     if not params.print_diagnostics:
         scan_pessimistic_batches_for_oom(
@@ -1270,6 +1240,9 @@ def run(rank, world_size, args):
             warmup=2.0,
             scaler=scaler,
         )
+
+    if checkpoints and "batch_idx_train" in checkpoints:
+        params.batch_idx_train = checkpoints["batch_idx_train"]
 
     for epoch in range(params.start_epoch, params.num_epochs + 1):
         scheduler.step_epoch(epoch - 1)
@@ -1349,7 +1322,7 @@ def scan_pessimistic_batches_for_oom(
             f"batch load time: {time.perf_counter() - st:.2f} sec"
         )
         try:
-            with torch.autocast("cuda", enabled=params.use_fp16):
+            with torch.amp.autocast("cuda", enabled=params.use_fp16):
                 loss, _ = compute_loss(
                     params=params,
                     model=model,
@@ -1372,7 +1345,6 @@ def scan_pessimistic_batches_for_oom(
                     f"(={crit_values[criterion]}) ..."
                 )
             raise
-    # exit()
 
 
 def main():

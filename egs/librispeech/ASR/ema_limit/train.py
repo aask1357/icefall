@@ -218,6 +218,12 @@ def add_model_arguments(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--out-skip",
+        type=str2bool,
+        default=True,
+    )
+
+    parser.add_argument(
         "--weight-norm",
         type=str2bool,
         default=True,
@@ -662,6 +668,7 @@ def get_encoder_model(params: AttributeDict) -> nn.Module:
         conv_pre_norm=params.conv_pre_norm,
         skip=params.skip,
         ema_r_activation=params.ema_r_activation,
+        out_skip=params.out_skip,
     )
     return encoder
 

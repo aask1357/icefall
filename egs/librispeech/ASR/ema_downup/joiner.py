@@ -32,33 +32,24 @@ class Joiner(nn.Module):
         vocab_size: int,
         activation: str = "Tanh",
         n_bits_act: Optional[int] = None,
-        n_bits_weight: int = 8,
-        eps: float = 1.0e-5,
-        weight_quantizer_mode: str = "max",
+        n_bits_weight: Optional[int] = None,
     ):
         super().__init__()
 
-        self.encoder_proj = QuantizedLinear(
-            encoder_dim, joiner_dim,
-            n_bits_act=n_bits_act,
-            n_bits_weight=n_bits_weight,
-            eps=eps,
-            weight_quantizer_mode=weight_quantizer_mode,
-        )
-        self.decoder_proj = QuantizedLinear(
-            decoder_dim, joiner_dim,
-            n_bits_act=n_bits_act,
-            n_bits_weight=n_bits_weight,
-            eps=eps,
-            weight_quantizer_mode=weight_quantizer_mode,
-        )
-        self.output_linear = QuantizedLinear(
-            joiner_dim, vocab_size,
-            n_bits_act=n_bits_act,
-            n_bits_weight=n_bits_weight,
-            eps=eps,
-            weight_quantizer_mode=weight_quantizer_mode,
-        )
+        if n_bits_weight is None:
+            self.encoder_proj = ScaledLinear(encoder_dim, joiner_dim)
+            self.decoder_proj = ScaledLinear(decoder_dim, joiner_dim)
+            self.output_linear = ScaledLinear(joiner_dim, vocab_size)
+        else:
+            self.encoder_proj = QuantizedLinear(
+                encoder_dim, joiner_dim, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
+            self.decoder_proj = QuantizedLinear(
+                decoder_dim, joiner_dim, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
+            self.output_linear = QuantizedLinear(
+                joiner_dim, vocab_size, n_bits_act=n_bits_act, n_bits_weight=n_bits_weight
+            )
         self.activation = getattr(torch.nn, activation)()
 
     def remove_weight_reparameterizations(self):

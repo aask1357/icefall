@@ -1,13 +1,12 @@
-model="ema_limit"
-exp="en/delete_it"
-CUDA_VISIBLE_DEVICES=4 ${model}/train.py \
-    --world-size 1 \
+model="ema_q_lss"
+exp="en/a8w8_lss_glr0.1_jsilu_dim512_bpemax4"
+CUDA_VISIBLE_DEVICES=0,1,2,3,4 ${model}/train.py \
+    --world-size 4 \
     --num-epochs 200 \
     --start-epoch 1 \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
-    --master-port 54324 \
     --use-fp16 True \
     --encoder-norm SyncBatchNorm \
     --channels 256 \
@@ -16,30 +15,19 @@ CUDA_VISIBLE_DEVICES=4 ${model}/train.py \
     --kernel-size 8 \
     --encoder-activation ReLU \
     --encoder-se-activation ReLU \
-    --skip residual \
-    --zero-init-residual True \
+    --skip residual-zeroinit \
     --se-gate tanh \
     --ema-gamma 0.97 \
-    --ema-r-activation sigmoid \
     --chunksize 8 \
-    --encoder-dim 512 \
-    --decoder-dim 256 \
-    --joiner-dim 256 \
     --encoder-dropout 0.075 \
-    --act-bal True \
-    --whitener True \
+    --decoder-dim 512 \
+    --joiner-dim 512 \
     --joiner-activation SiLU \
-    --weight-limit 0.3 \
-    --data-libri-train True \
-    --data-libri-dev-clean True \
-    --data-libri-dev-other True \
-    --data-ksponspeech-train False \
-    --data-ksponspeech-dev False \
-    --data-zeroth-train False \
-    --data-zeroth-test False \
-    --data-command-nor-train False \
-    --data-freetalk-nor-train False \
-    --on-the-fly-feats False \
+    --eps 1.0e-2 \
+    --n-bits-act 8 \
+    --n-bits-weight 8 \
+    --weight-quantizer-mode scale \
+    --quantizer-gamma-lr-ratio 0.1 \
     --bpe-model data/en/bpe_max4/bpe.model \
     --manifest-dir data/en/fbank \
     --cutset-text text \
@@ -47,5 +35,9 @@ CUDA_VISIBLE_DEVICES=4 ${model}/train.py \
     --simple-loss-scale 0.5 \
     --optimizer-name Eve \
     --weight-decay 0.001 \
+    --scheduler-name CosineWarmupLR \
+    --initial-lr 5e-3 \
+    --lr-warmup-iterations 0 \
+    --lr-eta-min 1.0e-4 \
     --min-utt-duration 1.0 \
     --max-utt-duration 20.0

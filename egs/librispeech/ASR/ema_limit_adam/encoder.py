@@ -540,7 +540,6 @@ class Encoder(EncoderInterface):
         ema_r_activation: str = "sigmoid",
         n_bits_act: tp.Optional[int] = None,
         n_bits_weight: tp.Optional[int] = None,
-        out_skip: bool = True,
     ) -> None:
         super().__init__()
 
@@ -581,10 +580,8 @@ class Encoder(EncoderInterface):
                 n_bits_weight=n_bits_weight,
             )
             self.cnn.append(layer)
-        self.out_skip = out_skip
-        in_ch = channels * 2 if out_skip else channels
-        self.proj = Conv(in_ch, output_channels, 1, bias=False)
-        print(f"out_skip: {out_skip}")
+        self.proj = Conv(channels * 2, output_channels, 1, bias=False)
+        self.zero_out_skip = False
     
     @torch.no_grad()
     def remove_weight_reparameterizations(
@@ -599,7 +596,7 @@ class Encoder(EncoderInterface):
             self.proj = Q(nn.Conv1d(proj.in_channels, proj.out_channels, 1, bias=False, **kwargs))
             self.proj.weight.data.copy_(proj.get_weight())
             self.conv_pre.remove_weight_reparameterizations()
-        if zero_out_skip and self.out_skip:
+        if zero_out_skip:
             C = self.proj.in_channels // 2
             new_proj = Q(nn.Conv1d(C, self.proj.out_channels, 1, bias=False, **kwargs))
             new_proj.weight.data.copy_(self.proj.weight.data[:, :C, :])
@@ -649,8 +646,8 @@ class Encoder(EncoderInterface):
         x_in = x
         for block in self.cnn:
             x, lengths = block(x, lengths, warmup)   # [batch_size, channels, time]
-
-        if self.out_skip:
+        
+        if not self.zero_out_skip:
             x = torch.cat((x, x_in), dim=1)
         x = self.proj(x)    # [batch_size, channels_out, time]
 
