@@ -10,6 +10,13 @@ except ImportError:
     print("Warning: Customquant cuda kernel is not available. Using torch implementation.")
     _KERNEL_AVAILABLE = False
 
+
+@torch.compile
+def sum_mul_float(x: Tensor, y: Tensor) -> Tensor:
+    """Fused operation"""
+    return (x.float() * y.float()).sum().view(1)
+
+
 class CustomQuantCuda(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -30,7 +37,7 @@ class CustomQuantCuda(torch.autograd.Function):
         grad_output: Tensor
     ) -> Tuple[Tensor, Tensor, None, None]:
         dx_ds, mask = ctx.saved_tensors
-        return grad_output * mask, dx_ds.mul_(grad_output).sum().view(1), None, None
+        return grad_output * mask, sum_mul_float(dx_ds, grad_output), None, None
 
 
 class RoundSTE(torch.autograd.Function):

@@ -1,6 +1,5 @@
-model="ema_q_hybrid"
-exp="en/scratch/a8w4_hybrid_100_max_lrlin5e-3_nowlimit_coslr"
-
+model="ema_q_lss"
+exp="en/scratch/a8w4_lss_glr0.1"
 CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
@@ -8,7 +7,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --exp-dir exp/$exp \
     --full-libri 1 \
     --max-duration 2400 \
-    --master-port 54320 \
     --use-fp16 True \
     --encoder-norm SyncBatchNorm \
     --channels 256 \
@@ -21,19 +19,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --se-gate tanh \
     --ema-gamma 0.97 \
     --chunksize 8 \
-    --encoder-dim 512 \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
     --eps 1.0e-2 \
     --n-bits-act 8 \
     --n-bits-weight 4 \
-    --weight-quantizer-mode max \
-    --quantizer-decay 0.95 \
-    --quantizer-quantile 1.0 \
-    --quantizer-learnable-gamma True \
-    --quantizer-gamma-min 0.01 \
-    --quantizer-gamma-max 1.0 \
+    --weight-quantizer-mode scale \
+    --quantizer-gamma-lr-ratio 0.1 \
     --data-libri-train True \
     --data-libri-dev-clean True \
     --data-libri-dev-other True \
@@ -51,6 +44,59 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
     --simple-loss-scale 0.5 \
     --optimizer-name Eve \
     --initial-lr 5e-3 \
+    --weight-decay 0.001 \
+    --scheduler-name CosineWarmupLR \
+    --lr-warmup-iterations 0 \
+    --lr-eta-min 1.0e-4 \
+    --min-utt-duration 1.0 \
+    --max-utt-duration 20.0
+
+model="ema_q_lss"
+exp="en/scratch/a8w4_lss_glr0.5_lr3e-3"
+CUDA_VISIBLE_DEVICES=0,1,2,3 ${model}/train.py \
+    --world-size 4 \
+    --num-epochs 200 \
+    --start-epoch 1 \
+    --exp-dir exp/$exp \
+    --full-libri 1 \
+    --max-duration 2400 \
+    --use-fp16 True \
+    --encoder-norm SyncBatchNorm \
+    --channels 256 \
+    --channels-expansion 1024 \
+    --dilations-version 11 \
+    --kernel-size 8 \
+    --encoder-activation ReLU \
+    --encoder-se-activation ReLU \
+    --skip residual-zeroinit \
+    --se-gate tanh \
+    --ema-gamma 0.97 \
+    --chunksize 8 \
+    --decoder-dim 256 \
+    --joiner-dim 256 \
+    --encoder-dropout 0.075 \
+    --eps 1.0e-2 \
+    --n-bits-act 8 \
+    --n-bits-weight 4 \
+    --weight-quantizer-mode scale \
+    --quantizer-gamma-lr-ratio 0.5 \
+    --data-libri-train True \
+    --data-libri-dev-clean True \
+    --data-libri-dev-other True \
+    --data-ksponspeech-train False \
+    --data-ksponspeech-dev False \
+    --data-zeroth-train False \
+    --data-zeroth-test False \
+    --data-command-nor-train False \
+    --data-freetalk-nor-train False \
+    --on-the-fly-feats False \
+    --bpe-model data/en/lang_bpe_500/bpe.model \
+    --manifest-dir data/en/fbank \
+    --cutset-text text \
+    --num-workers 2 \
+    --simple-loss-scale 0.5 \
+    --optimizer-name Eve \
+    --initial-lr 3e-3 \
     --weight-decay 0.001 \
     --scheduler-name CosineWarmupLR \
     --lr-warmup-iterations 0 \

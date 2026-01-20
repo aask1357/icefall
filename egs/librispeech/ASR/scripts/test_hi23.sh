@@ -1,7 +1,7 @@
-model="ema_limit_customquant"
-exp="en/scratch/a8w4_omni_emamax_lrlin5e-3_nowlimit_actbal"
+model="ema_q_lss"
+exp="en/scratch/a8w4_lss_glr0.1"
 avg=64
-CUDA_VISIBLE_DEVICES=0 ${model}/decode.py \
+CUDA_VISIBLE_DEVICES=6 ${model}/decode.py \
     --epoch 200 \
     --iter 0 \
     --avg $avg \
@@ -21,16 +21,16 @@ CUDA_VISIBLE_DEVICES=0 ${model}/decode.py \
     --se-gate tanh \
     --ema-gamma 0.97 \
     --chunksize 8 \
-    --encoder-dim 512 \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
     --act-bal True \
+    --whitener True \
     --eps 1.0e-2 \
     --n-bits-act 8 \
     --n-bits-weight 4 \
-    --quantizer-mode omni_emamax \
-    --quantizer-gamma 0.95 \
+    --weight-quantizer-mode scale \
+    --quantizer-gamma-lr-ratio 0.1 \
     --bpe-model data/en/lang_bpe_500/bpe.model \
     --manifest-dir data/en/fbank \
     --cutset-text text \

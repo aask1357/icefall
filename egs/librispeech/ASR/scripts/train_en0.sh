@@ -1,6 +1,5 @@
-model="ema_q_hybrid"
-exp="en/scratch/a8w4_hybrid_99_max_lrlin5e-3_nowlimit_coslr"
-
+model="ema_q_hybrid3"
+exp="en/scratch/a8w4_v3_a99gamma_wmaxgamma"
 CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --world-size 4 \
     --num-epochs 200 \
@@ -21,7 +20,6 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --se-gate tanh \
     --ema-gamma 0.97 \
     --chunksize 8 \
-    --encoder-dim 512 \
     --decoder-dim 256 \
     --joiner-dim 256 \
     --encoder-dropout 0.075 \
@@ -34,6 +32,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 ${model}/train.py \
     --quantizer-learnable-gamma True \
     --quantizer-gamma-min 0.1 \
     --quantizer-gamma-max 10.0 \
+    --quantizer-gamma-lr-ratio 1.0 \
     --data-libri-train True \
     --data-libri-dev-clean True \
     --data-libri-dev-other True \
