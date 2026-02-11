@@ -11,11 +11,61 @@ from scaling import (
     ActivationBalancer,
     BasicNorm,
     ScaledConv1d,
-    ScaledSyncBatchNorm,
-    ScaledBatchNorm1d,
 )
 from quantized_layers import QuantizedConv1d
 from chip_fp16 import Q, q
+
+
+class BatchNorm1d(nn.BatchNorm1d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.finetuning_mode = False
+
+    def set_norm_finetuning_mode(self):
+        inv_std = (self.running_var + self.eps).rsqrt()
+        weight = inv_std
+        bias = -self.running_mean * inv_std
+        delattr(self, "running_var")
+        delattr(self, "running_mean")
+        if self.weight is not None:
+            weight.mul_(self.weight.data)
+            bias.add_(self.bias.data)
+        delattr(self, "weight")
+        delattr(self, "bias")
+        self.register_buffer("weight", weight)
+        self.register_buffer("bias", bias)
+        self.finetuning_mode = True
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.finetuning_mode:
+            return self.bias.view(-1, 1).addcmul(x, self.weight.view(-1, 1))
+        return super().forward(x)
+
+
+class SyncBatchNorm(nn.SyncBatchNorm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.finetuning_mode = False
+
+    def set_norm_finetuning_mode(self):
+        inv_std = (self.running_var + self.eps).rsqrt()
+        weight = inv_std
+        bias = -self.running_mean * inv_std
+        delattr(self, "running_var")
+        delattr(self, "running_mean")
+        if self.weight is not None:
+            weight.mul_(self.weight.data)
+            bias.add_(self.bias.data)
+        delattr(self, "weight")
+        delattr(self, "bias")
+        self.register_buffer("weight", weight)
+        self.register_buffer("bias", bias)
+        self.finetuning_mode = True
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.finetuning_mode:
+            return self.bias.view(-1, 1).addcmul(x, self.weight.view(-1, 1))
+        return super().forward(x)
 
 
 class CausalConv1d(nn.Conv1d):
@@ -239,9 +289,9 @@ class ConvBlock(nn.Module):
 
         self.norm = norm
         if norm == "BatchNorm":
-            Norm = nn.BatchNorm1d
+            Norm = BatchNorm1d
         elif norm == "SyncBatchNorm":
-            Norm = nn.SyncBatchNorm
+            Norm = SyncBatchNorm
         elif norm == "BasicNorm":
             Norm = BasicNorm
         else:

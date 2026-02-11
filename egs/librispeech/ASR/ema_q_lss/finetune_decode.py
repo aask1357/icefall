@@ -207,6 +207,18 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--fix-norm",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
+        "--fix-quantizer",
+        type=str2bool,
+        default=False,
+    )
+
+    parser.add_argument(
         "--exp-dir",
         type=str,
         default="ema/kws_abs",
@@ -778,29 +790,20 @@ def main():
     logging.info("About to create model")
     model = get_transducer_model(params)
 
-    
+    if params.fix_norm:
+        for module in model.modules():
+            if hasattr(module, "set_norm_finetuning_mode"):
+                module.set_norm_finetuning_mode()
+    if params.fix_quantizer:
+        for module in model.modules():
+            if hasattr(module, "set_quantizer_finetuning_mode"):
+                module.set_quantizer_finetuning_mode()
     for module in model.modules():
         if hasattr(module, "is_initialized"):
             module.is_initialized = True
+
     if not params.use_averaged_model:
-        if params.iter > 0:
-            filenames = find_checkpoints(params.exp_dir, iteration=-params.iter)[
-                : params.avg
-            ]
-            if len(filenames) == 0:
-                raise ValueError(
-                    f"No checkpoints found for"
-                    f" --iter {params.iter}, --avg {params.avg}"
-                )
-            elif len(filenames) < params.avg:
-                raise ValueError(
-                    f"Not enough checkpoints ({len(filenames)}) found for"
-                    f" --iter {params.iter}, --avg {params.avg}"
-                )
-            logging.info(f"averaging {filenames}")
-            model.to(device)
-            model.load_state_dict(average_checkpoints(filenames, device=device))
-        elif params.avg == 1:
+        if params.avg == 1:
             load_checkpoint(f"{params.exp_dir}/epoch-{params.epoch}.pt", model)
         else:
             start = params.epoch - params.avg + 1
@@ -812,59 +815,31 @@ def main():
             model.to(device)
             model.load_state_dict(average_checkpoints(filenames, device=device))
     else:
-        if params.iter > 0:
-            filenames = find_checkpoints(params.exp_dir, iteration=-params.iter)[
-                : params.avg + 1
-            ]
-            if len(filenames) == 0:
-                raise ValueError(
-                    f"No checkpoints found for"
-                    f" --iter {params.iter}, --avg {params.avg}"
-                )
-            elif len(filenames) < params.avg + 1:
-                raise ValueError(
-                    f"Not enough checkpoints ({len(filenames)}) found for"
-                    f" --iter {params.iter}, --avg {params.avg}"
-                )
-            filename_start = filenames[-1]
-            filename_end = filenames[0]
-            logging.info(
-                "Calculating the averaged model over iteration checkpoints"
-                f" from {filename_start} (excluded) to {filename_end}"
+        assert params.avg > 0, params.avg
+        start = params.epoch - params.avg
+        assert start >= 1, start
+        filename_start = f"{params.exp_dir}/epoch-{start}.pt"
+        filename_end = f"{params.exp_dir}/epoch-{params.epoch}.pt"
+        logging.info(
+            f"Calculating the averaged model over epoch range from "
+            f"{start} (excluded) to {params.epoch}"
+        )
+        model.to(device)
+        model.load_state_dict(
+            average_checkpoints_with_averaged_model(
+                filename_start=filename_start,
+                filename_end=filename_end,
+                device=device,
             )
-            model.to(device)
-            model.load_state_dict(
-                average_checkpoints_with_averaged_model(
-                    filename_start=filename_start,
-                    filename_end=filename_end,
-                    device=device,
-                )
-            )
-        else:
-            assert params.avg > 0, params.avg
-            start = params.epoch - params.avg
-            assert start >= 1, start
-            filename_start = f"{params.exp_dir}/epoch-{start}.pt"
-            filename_end = f"{params.exp_dir}/epoch-{params.epoch}.pt"
-            logging.info(
-                f"Calculating the averaged model over epoch range from "
-                f"{start} (excluded) to {params.epoch}"
-            )
-            model.to(device)
-            model.load_state_dict(
-                average_checkpoints_with_averaged_model(
-                    filename_start=filename_start,
-                    filename_end=filename_end,
-                    device=device,
-                )
-            )
+        )
 
     model.to(device)
     model.eval()
+
     if params.avg > 1 and params.update_bn and model.encoder.norm == "BatchNorm":
         update_bn(model.encoder, args, sp)
-    for p in model.parameters():
-        q(p)
+    # for p in model.parameters():
+    #     q(p)
 
     if "fast_beam_search" in params.decoding_method:
         if params.decoding_method == "fast_beam_search_nbest_LG":

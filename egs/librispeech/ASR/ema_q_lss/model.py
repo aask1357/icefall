@@ -40,6 +40,8 @@ class Transducer(nn.Module):
         decoder_dim: int,
         joiner_dim: int,
         vocab_size: int,
+        detach_simple_am: bool = False,
+        detach_simple_lm: bool = False,
     ):
         """
         Args:
@@ -68,6 +70,8 @@ class Transducer(nn.Module):
 
         self.simple_am_proj = ScaledLinear(encoder_dim, vocab_size, initial_speed=0.5)
         self.simple_lm_proj = ScaledLinear(decoder_dim, vocab_size)
+        self.detach_simple_am = detach_simple_am
+        self.detach_simple_lm = detach_simple_lm
 
     def forward(
         self,
@@ -156,8 +160,15 @@ class Transducer(nn.Module):
         boundary[:, 2] = y_lens
         boundary[:, 3] = x_lens
 
-        lm = self.simple_lm_proj(decoder_out)
-        am = self.simple_am_proj(encoder_out)
+        simple_lm_input = decoder_out
+        if self.detach_simple_lm:
+            simple_lm_input = simple_lm_input.detach()
+        simple_am_input = encoder_out
+        if self.detach_simple_am:
+            simple_am_input = simple_am_input.detach()
+
+        lm = self.simple_lm_proj(simple_lm_input)
+        am = self.simple_am_proj(simple_am_input)
 
         with torch.amp.autocast("cuda", enabled=False):
             simple_loss, (px_grad, py_grad) = k2.rnnt_loss_smoothed(

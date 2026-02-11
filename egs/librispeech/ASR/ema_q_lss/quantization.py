@@ -28,35 +28,38 @@ class ActQuantizer(nn.Module):
         self.q_max = float(2 ** (n_bits - 1) - 1)
         self.eps = eps
         self.inplace = inplace
-        self._is_initialized_cpu = True
+        self.is_initialized = True
         self.register_buffer("x_abs_max", torch.tensor(1.0))
         if act_gamma:
-            self._is_initialized_cpu = True
+            self.is_initialized = False
             self.gamma = nn.Parameter(torch.ones((1,)))
         else:
             self.gamma = None
+        self.finetuning = False
 
-    @torch.no_grad()
-    def get_q_quantile(self, x: Tensor) -> Tensor:
-        if self.q == 1.0:
-            return x.abs().amax()
-        x_sorted = x.flatten().abs().sort().values
-        k = round(self.q * x_sorted.numel())
-        q_quantile = x_sorted[k]
-        return q_quantile
+    def set_quantizer_finetuning_mode(self):
+        if self.gamma is not None:
+            self.is_initialized = True
+            gamma = self.gamma.data
+            delattr(self, "gamma")
+            self.register_buffer("gamma", gamma)
+            delattr(self, "x_abs_max")
+        self.finetuning = True
 
     @torch.autocast("cuda", enabled=False)
     def forward(self, x: Tensor) -> Tensor:
-        if not self._is_initialized_cpu:
+        if not self.is_initialized:
             x_abs_max = x.abs().amax()
             self.gamma.data.fill_(x_abs_max)
             self.x_abs_max.data.fill_(x_abs_max)
-            self._is_initialized_cpu = True
+            self.is_initialized = True
 
-        x_abs_max = x.abs().amax()
-        self.x_abs_max.data.mul_(0.95).add_(x_abs_max, alpha=0.05)
+        if self.training and not self.finetuning:
+            x_abs_max = x.abs().amax()
+            self.x_abs_max.data.mul_(0.95).add_(x_abs_max, alpha=0.05)
         if self.gamma is not None:
-            self.gamma.data.clamp_(min=self.eps, max=self.x_abs_max)
+            if self.training and not self.finetuning:
+                self.gamma.data.clamp_(min=self.eps, max=self.x_abs_max)
             scale = self.gamma / self.q_max
         else:
             scale = self.x_abs_max / self.q_max
@@ -77,32 +80,55 @@ class WeightQuantizer(nn.Module):
         self.mode = mode
         self.gamma = nn.Parameter(torch.ones((1,)))
 
-        self._is_initialized_cpu = True
+        self.is_initialized = True
         if self.mode == "scale":
-            self._is_initialized_cpu = True
+            self.is_initialized = False
         elif self.mode == "max":
             self.gamma = None
+        self.finetuning = False
+
+    def set_quantizer_finetuning_mode(self, x=None):
+        if self.mode == "scale":
+            self.is_initialized = True
+            gamma = self.gamma.data
+            delattr(self, "gamma")
+            self.register_buffer("gamma", gamma)
+        elif x is None:
+            self.is_initialized = False
+        elif self.mode == "max":
+            self.register_buffer("gamma", x.detach().abs().amax())
+            self.mode = "scale"
+        elif self.mode == "max_gamma":
+            gamma = self.gamma.data
+            delattr(self, "gamma")
+            self.register_buffer("gamma", x.detach().abs().amax() * gamma)
+            self.mode = "scale"
+        self.finetuning = True
 
     @torch.autocast("cuda", enabled=False)
     def forward(self, x: Tensor) -> Tensor:
         """
         return round(x_clamped / scale) * scale
         """
-        if not self._is_initialized_cpu:
-            assert self.mode == "scale", self.mode
-            scale = x.detach().abs().amax()
-            self.gamma.data.fill_(scale)
-            self._is_initialized_cpu = True
+        if not self.is_initialized:
+            if self.mode == "scale":
+                scale = x.detach().abs().amax()
+                self.gamma.data.fill_(scale)
+            else:
+                self.set_quantizer_finetuning_mode(x)
+            self.is_initialized = True
 
         if self.mode == "scale":
-            scale_max = x.detach().abs().amax()
-            self.gamma.data.clamp_(min=self.eps, max=scale_max)
+            if self.training and not self.finetuning:
+                scale_max = x.detach().abs().amax()
+                self.gamma.data.clamp_(min=self.eps, max=scale_max)
             scale = self.gamma / self.q_max
         elif self.mode == "max":
             x_abs_max = x.abs().amax().float()
             scale = x_abs_max / self.q_max
         elif self.mode == "max_gamma":
-            self.gamma.data.clamp_(min=0.01, max=1.0)
+            if self.training:
+                self.gamma.data.clamp_(min=0.01, max=1.0)
             x_abs_max = x.abs().amax().float()
             scale = x_abs_max * (self.gamma / self.q_max)
 
