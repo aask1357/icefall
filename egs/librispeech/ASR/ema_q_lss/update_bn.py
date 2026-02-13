@@ -90,7 +90,7 @@ def update_bn(model: nn.Module, args, sp) -> None:
                 warmup=1.0
             )
         print(f"\r{time/60/60:6.2f}/{MAX_TIME} hours", end="", flush=True)
-        if time > MAX_TIME * 60 * 60:    # 100 hours
+        if time > MAX_TIME * 60 * 60:    # 10 hours
             print("")
             break
 

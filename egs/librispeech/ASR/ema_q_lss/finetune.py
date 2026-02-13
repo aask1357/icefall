@@ -47,6 +47,7 @@ from optim import Eden, Eve, LRScheduler, ExponentialWarmupLR, LinearWarmupLR, C
 from plot_params import plot_params
 from beam_search import fast_beam_search_one_best
 from custom_utils import MetricsTracker, write_error_stats
+from update_bn import update_bn
 
 
 LRSchedulerType = Union[torch.optim.lr_scheduler._LRScheduler, LRScheduler]
@@ -538,6 +539,11 @@ def get_parser():
     parser.add_argument(
         "--load-epoch",
         type=int,
+    )
+
+    parser.add_argument(
+        "--ft-path",
+        type=str,
     )
 
     parser.add_argument(
@@ -1223,8 +1229,19 @@ def run(rank, world_size, args):
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of model parameters: {num_param}")
 
-    if params.start_epoch == 1:
-        # Load a pretrained model
+    def load():
+        if params.ft_path:
+            sd = torch.load(
+                params.ft_path, weights_only=False,
+                map_location="cpu"
+            )
+            new_sd = {}
+            for k, v in sd["model"].items():
+                if "initial_cache" in k:
+                    continue
+                new_sd[k] = v
+            model.load_state_dict(new_sd)
+            return
         if not params.use_averaged_model:
             if params.avg == 1:
                 load_checkpoint(f"{params.load_dir}/epoch-{params.load_epoch}.pt", model)
@@ -1255,8 +1272,16 @@ def run(rank, world_size, args):
             )
 
         model.to(device)
-        if params.update_bn:
+        if not params.update_bn:
+            return
+        if rank == 0:
             update_bn(model.encoder, args, sp)
+        if world_size > 1:
+            torch.distributed.barrier()
+
+    if params.start_epoch == 1:
+        # Load a pretrained model
+        load()
 
     if params.fix_norm:
         for module in model.modules():

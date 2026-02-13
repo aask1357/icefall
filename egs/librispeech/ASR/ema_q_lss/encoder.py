@@ -1,6 +1,7 @@
 import typing as tp
 
 import torch
+import torch.distributed as dist
 from torch.nn import functional as F
 from torch import Tensor, nn
 from lhotse.utils import LOG_EPSILON
@@ -30,6 +31,9 @@ class BatchNorm1d(nn.BatchNorm1d):
         if self.weight is not None:
             weight.mul_(self.weight.data)
             bias.add_(self.bias.data)
+        if dist.is_initialized():
+            dist.broadcast(weight, src=0)
+            dist.broadcast(bias, src=0)
         delattr(self, "weight")
         delattr(self, "bias")
         self.register_buffer("weight", weight)
@@ -56,6 +60,9 @@ class SyncBatchNorm(nn.SyncBatchNorm):
         if self.weight is not None:
             weight.mul_(self.weight.data)
             bias.add_(self.bias.data)
+        if dist.is_initialized():
+            dist.broadcast(weight, src=0)
+            dist.broadcast(bias, src=0)
         delattr(self, "weight")
         delattr(self, "bias")
         self.register_buffer("weight", weight)

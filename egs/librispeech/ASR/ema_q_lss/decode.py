@@ -159,6 +159,12 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--save",
+        action="store_true",
+        help="""Whether to save the model checkpoints.""",
+    )
+
+    parser.add_argument(
         "--epoch",
         type=int,
         default=120,
@@ -865,6 +871,24 @@ def main():
         update_bn(model.encoder, args, sp)
     for p in model.parameters():
         q(p)
+    if params.save:
+        filename = f"{params.exp_dir}/e{params.epoch}-avg{params.avg}-dur{params.max_duration}"
+        if not params.use_averaged_model:
+            filename += "-noavg"
+        if not params.update_bn:
+            filename += "-noubn"
+        filename += ".pt"
+        torch.save(
+            {
+                'model': model.state_dict(),
+                'description': (
+                    f"exp={params.exp_dir}, "
+                    f"epoch={params.epoch}, "
+                    f"avg={params.avg}, "
+                    f"use-averaged-model={params.use_averaged_model}, "
+                ),
+            }, filename
+        )
 
     if "fast_beam_search" in params.decoding_method:
         if params.decoding_method == "fast_beam_search_nbest_LG":
